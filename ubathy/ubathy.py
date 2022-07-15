@@ -699,6 +699,7 @@ def ObtainZb(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrit
             #
             plt.tight_layout()
             plt.savefig(pathTMPPlot, dpi=100)
+            plt.savefig(pathTMPPlotTXT, dpi=100)
             plt.close('all')
     #
     return None
