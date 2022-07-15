@@ -110,7 +110,7 @@ import sys
 import os
 sys.path.insert(0, 'ubathy')
 import ubathy as ubathy
-pathFolderMain = 'example_00'
+pathFolderMain = 'example'
 ```
 
 Set also the folders where the videos (**`videos`**) and data files (**`data`**) are located, and the folders where the temporary data (**`scratch`**) and the estimated bathymetries (**`bathymetries`**) will be stored:
@@ -219,7 +219,7 @@ pathFolderData = os.path.join(pathFolderMain, 'data')
 As a result, in the scratch folder **`scratch`**, the file containing the mesh for the bathymetry `mesh_Zb.npz`, which is common for all the videos, and the meshes for obtaining the wave modes `mesh_M.npz` and the wavenumbers `mesh_K.npz` for each video `<videoFilename>` will be obtained. In case the plots have been generated, the corresponding figures will be found in the **`scratch/plots`** folder, following the same folder structure as the data files. 
 
 ## Mode decomposition
-Once the frames of the videos are available and the meshes have been generated, the decomposition of the waves into modes can be performed. Prior to the decomposition into modes, an algorithm based on Principal Component Analysis (Robust PCA) can be applied to reduce the noise in the images. The code includes two algorithms for the decomposition of the waves into modes. One is based on Empirical Orthogonal Functions (EOF) and the other on a Dynamic Mode Decomposition (DMD). These analyses are performed on sub-videos of the main video. The length of these sub-videos and their number will determine the wave periods that can be solved and the number of modes.
+Once the frames of the videos are available and the meshes have been generated, the decomposition of the waves into modes can be performed. Prior to the decomposition into modes, an algorithm based on Principal Component Analysis (Robust PCA) can be applied to reduce the noise in the images. The code includes two algorithms for the decomposition of the waves into modes. One is based on Empirical Orthogonal Functions (EOF) and the other on Dynamic Mode Decomposition (DMD). These analyses are performed on sub-videos of the main video. The length of these sub-videos and their number will determine the wave periods that can be solved and the number of modes.
 The following parameters need to be set in the `parameters.json` file: 
 
 | Object-name | Description | Suggested value | Suggested range | Units | 
@@ -306,8 +306,11 @@ To facilitate the reading and processing of these bathymetries, files containing
 * `mesh_Zb.txt`: For each grid points of the mesh one line with
 >`x-coordinate`, `y-coordinate`
 
-* `<date>_Zb.txt` and `<date>_GT_Zb.txt`: For each grid points of the mesh one line with
+* `<date>_Zb.txt`: For each grid points of the mesh one line with
 >`z-coordinate`, `self_error`
+
+* `<date>_GT_Zb.txt`: For each grid points of the mesh one line with
+>`z-coordinate`
 
 The order of the grid points in the mesh and bathymetry files is the same. Therefore, to the same line number belongs the coordinates and the bathymetry of the same point in the corresponding files. The values of the bathymetry at the points where it has not been possible to evaluate are indicated by _`NaN`_ values. In case the plots have been generated, the corresponding figures with the bathymetry will be found in the **`bathymetries/plots`** folder.
 
@@ -349,8 +352,3 @@ UCalib is released under a [AGPL-3.0 license](https://github.com/Ulises-ICM-UPC/
       url = {https://github.com/Ulises-ICM-UPC/UBathy}
       }
 
-
-
-```python
-
-```

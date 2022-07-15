@@ -10,14 +10,7 @@ import sys
 sys.path.insert(0, 'ubathy')
 import ubathy as ubathy # WATCH OUT
 #
-pathFolderMain = 'example_Castelldefels_00'
-#pathFolderMain = 'example_Castelldefels_08'
-#pathFolderMain = 'example_Castelldefels_12'
-#pathFolderMain = 'example_Castelldefels_Kalman'
-#pathFolderMain = 'example_Duck'
-#pathFolderMain = 'example_Narrabeen'
-#pathFolderMain = 'example_Porthtowan'
-#pathFolderMain = 'example_Scheveningen'
+pathFolderMain = 'example'
 assert os.path.exists(pathFolderMain)
 #
 #''' --------------------------------------------------------------------------
@@ -26,11 +19,11 @@ assert os.path.exists(pathFolderMain)
 #
 pathFolderVideos = os.path.join(pathFolderMain, 'videos')
 listOfVideos = [] # if [], takes all the available
-fps = 0.0 # if 0.0, fps is the video time resolution
+FPS = 0.0 # if 0.0, FPS is the video time resolution
 overwrite = False
 #
 print('Extraction of the videos')
-ubathy.Video2Frames(pathFolderVideos, listOfVideos, fps, overwrite)
+ubathy.Video2Frames(pathFolderVideos, listOfVideos, FPS, overwrite)
 #
 #''' --------------------------------------------------------------------------
 # Creation of the meshes

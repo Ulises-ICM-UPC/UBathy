@@ -14,6 +14,7 @@ import random
 import scipy as sc
 from scipy import optimize
 from scipy import signal
+import sys
 #
 def Video2Frames(pathFolderVideos, listOfVideos, fps, overwrite): # last read 2022-07-10
     #
@@ -41,7 +42,7 @@ def Video2Frames(pathFolderVideos, listOfVideos, fps, overwrite): # last read 20
         fpsOfVideo = cv2.VideoCapture(pathVideo).get(cv2.CAP_PROP_FPS)
         if fps > fpsOfVideo:
             print('*** actual frames per second of the video ({:3.2f}) smaller than pretended ({:3.2f})'.format(fpsOfVideo, fps))
-            print('*** select a smaller fps ***'); exit()
+            print('*** select a smaller fps ***'); sys.exit()
         elif fps == 0:
             fps = fpsOfVideo
         else: # 0 < fps <= fpsOfVideo so that fpsOfVideo / fps >= 1 and also int(fpsOfVideo / fps) >= 1
@@ -90,7 +91,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
         print('... mesh_Zb was already created')
     #
     # obtain listOfVideos
-    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item))])
+    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
     if listOfVideos == []:
         listOfVideos = copy.deepcopy(listOfVideosH)
     else:
@@ -108,7 +109,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
         elif len(pathPlwTxts) > 0:
             isPlw, pathPlwTxt = True, pathPlwTxts[0]
         else:
-            print('*** missing calibration, free surface or planview definition files in folder {:}'.format(os.path.join(pathFolderData, video))); exit()
+            print('*** missing calibration, free surface or planview definition files in folder {:}'.format(os.path.join(pathFolderData, video))); sys.exit()
         #
         # create and write mesh_M
         pathTMP = os.path.join(pathFolderScratch, video, 'mesh_M.npz')
@@ -119,7 +120,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
                 rawData = np.asarray(ulises.ReadRectangleFromTxt(pathPlwTxt, {'c1':5, 'valueType':'float'}))
                 csM, rsM, xsM, ysM, zsM = [rawData[:, item] for item in range(5)]
                 if not (np.allclose(csM, csM.astype(int)) and np.allclose(rsM, rsM.astype(int))):
-                    print('*** pixel coordinates must be integers >= 0 at {:}'.format(pathPlwTxt)); exit()
+                    print('*** pixel coordinates must be integers >= 0 at {:}'.format(pathPlwTxt)); sys.exit()
             else: # pixels correspond to the oblique image nad are integers
                 # load zt
                 zt = ulises.ReadRectangleFromTxt(pathZsTxt, {'c1':1, 'valueType':'float'})[0]
@@ -230,7 +231,7 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
         par = json.load(f)
     #
     # obtain list of videos
-    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item))])
+    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
     if listOfVideos == []:
         listOfVideos = copy.deepcopy(listOfVideosH)
     else:
@@ -264,7 +265,7 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
         ts, dtsMean = ts - ts[0], np.mean(np.diff(ts))
         ts = dtsMean * np.arange(len(ts)) # IMP*
         if par['DMD_or_EOF'] == 'EOF' and par['min_period'] < 6 * dtsMean:
-            print('*** working with EOF, "min_period" in json file must be >= 6 / fps (>= {:5.2f})'.format(6*dtsMean)); exit()
+            print('*** working with EOF, "min_period" in json file must be >= 6 / fps (>= {:5.2f})'.format(6*dtsMean)); sys.exit()
         #
         # load cs and rs for mesh_M (coordinates in the image, whether planview or oblique)
         data = np.load(os.path.join(pathFolderScratch, video, 'mesh_M.npz'))
@@ -335,7 +336,7 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
                             continue
                         modes[posEOF] = {'var':var, 'wStdOverW':wStd/w, 'w':w, 'T':T, 'phases':np.angle(EOF['EOFs'][posEOF]), 'amplitudes':np.abs(EOF['EOFs'][posEOF])}
                 else:
-                    print('*** "DMD_or_EOF" in json file must be "DMD" or "EOF"'); exit()
+                    print('*** "DMD_or_EOF" in json file must be "DMD" or "EOF"'); sys.exit()
                 #
                 # write and plot the results
                 for key in modes.keys():
@@ -381,7 +382,7 @@ def ObtainK(pathFolderData, pathFolderScratch, listOfVideos, overwrite, verboseP
         par = json.load(f)
     #
     # obtain list of videos
-    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item))])
+    listOfVideosH = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
     if listOfVideos == []:
         listOfVideos = copy.deepcopy(listOfVideosH)
     else:
@@ -556,7 +557,9 @@ def ObtainZb(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrit
         if os.path.exists(pathOut) and not overwrite:
             print('... bathymetry for date {:} was already computed'.format(date))
             continue
-        print('... computing bathymetry for date {:}'.format(date))
+        print('... computing bathymetry for date {:}'.format(date), end='', flush=True)
+        pathOutTXT = os.path.join(pathFolderBathymetries, '{:}_Zb.txt'.format(date))
+        pathmZbTXT = os.path.join(pathFolderBathymetries, 'mesh_Zb.txt')
         #
         # run through videos for the date
         xsKW, ysKW, ksKW, meanGsKW, TsKW, ztsKW = [np.asarray([]) for item in range(6)]
@@ -586,6 +589,7 @@ def ObtainZb(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrit
         #assert np.sum(np.isnan(ksKW)) == np.sum(np.isnan(meanGsKW)) == np.sum(np.isnan(gammasKW)) == np.sum(np.isnan(wsKW)) == 0
         #
         if len(xsKW) == 0:
+            print(' failed')
             continue
         #
         # obtain zsZb and zsZbe
@@ -595,7 +599,7 @@ def ObtainZb(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrit
             dsToKWTMP = np.sqrt((xsKW - xsZb[posZb]) ** 2 + (ysKW - ysZb[posZb]) ** 2)
             
             poss0 = np.where(dsToKWTMP <= 1.1 * np.min(dsToKWTMP) + 1.e-3)[0]
-            R_Zb = max([par['coef_R_Zb'] * np.mean(2. * np.pi * par['g'] * meanGsKW[poss0] / wsKW[poss0] ** 2), 2.1 * par['delta_K']])
+            R_Zb = max([par['cRadius_Zb'] * np.mean(2. * np.pi * par['g'] * meanGsKW[poss0] / wsKW[poss0] ** 2), 2.1 * par['delta_K']])
             possInKW = np.where(dsToKWTMP <= R_Zb)[0]
             #
             if len(possInKW) < 10: # WATCH
@@ -634,21 +638,43 @@ def ObtainZb(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrit
         ulises.MakeFolder(os.path.split(pathOut)[0])
         np.savez(pathOut, zsZb=zsZb, zsZbe=zsZbe)
         #
+        ulises.MakeFolder(os.path.split(pathOutTXT)[0])
+        fileOutTXT = open(pathOutTXT, 'w')
+        filemZbTXT = open(pathmZbTXT, 'w')
+        for posZb in range(len(xsZb)):
+            fileOutTXT.write('{:9.4f} {:9.4f}\n'.format(zsZb[posZb], zsZbe[posZb]))
+            filemZbTXT.write('{:15.3f} {:15.3f}\n'.format(xsZb[posZb], ysZb[posZb]))
+        fileOutTXT.close()
+        filemZbTXT.close()
+        #
+        print(' success')
+        #
+        # interpolate and write groundTruth bathymetry
+        pathBath = os.path.join(pathFolderData, 'groundTruth', '{:}_GT_xyz.txt'.format(date))
+        if os.path.exists(pathBath):
+            rawData = np.asarray(ulises.ReadRectangleFromTxt(pathBath, {'c1':3, 'valueType':'float'}))
+            xsB, ysB, zbsB = rawData[:, 0], rawData[:, 1], rawData[:, 2]
+            xsysB, xsysZb = np.transpose(np.asarray([xsB, ysB])), np.transpose(np.asarray([xsZb, ysZb]))
+            vtx, wts = interp_weights220622(xsysB, xsysZb)
+            zbsBInZb = interpolate220622(zbsB, vtx, wts)
+            #
+            pathOutGT = os.path.join(pathFolderScratch, 'Zb_bathymetries', '{:}_GT_Zb.npz'.format(date))
+            np.savez(pathOutGT, zbsBInZb=zbsBInZb)
+            #
+            pathOutGTTXT = os.path.join(pathFolderBathymetries, '{:}_GT_Zb.txt'.format(date))
+            fileOutGTTXT = open(pathOutGTTXT, 'w')
+            for posZb in range(len(xsZb)):
+                fileOutGTTXT.write('{:9.4f}\n'.format(zbsBInZb[posZb]))
+            fileOutGTTXT.close()
+        else:
+            zbsBInZb = np.NaN
         # plot the result
         if verbosePlot:
             #
-            pathBath = os.path.join(pathFolderData, 'GT_{:}_xyz.txt'.format(date))
-            if os.path.exists(pathBath):
-                rawData = np.asarray(ulises.ReadRectangleFromTxt(pathBath, {'c1':3, 'valueType':'float'}))
-                xsB, ysB, zbsB = rawData[:, 0], rawData[:, 1], rawData[:, 2]
-                xsysB, xsysZb = np.transpose(np.asarray([xsB, ysB])), np.transpose(np.asarray([xsZb, ysZb]))
-                vtx, wts = interp_weights220622(xsysB, xsysZb)
-                zbsBInZb = interpolate220622(zbsB, vtx, wts)
-            else:
-                zbsBInZb = xsZb; zbsBInZb[:] = np.NaN
-            #
             pathTMPPlot = os.path.join(pathFolderScratch, 'plots', 'Zb_bathymetries', '{:}_{:}_Zb.png'.format(date, par['DMD_or_EOF']))
             ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
+            pathTMPPlotTXT = os.path.join(pathFolderBathymetries, 'plots', '{:}_Zb.png'.format(date))
+            ulises.MakeFolder(os.path.split(pathTMPPlotTXT)[0])
             #
             fig = plt.figure(figsize=[9, 4]) # width x height
             plt.suptitle('date = {:}'.format(date))
