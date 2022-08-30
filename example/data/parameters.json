@@ -1,0 +1,20 @@
+{
+    "g"            : 9.81,
+    "delta_M"      : 2.50,
+    "delta_K"      : 5.00,
+    "delta_Zb"     : 5.00,
+    "candes_iter"  : 50,
+    "DMD_or_EOF"   : "DMD",
+    "DMD_rank"     : 6,
+    "EOF_variance" : 0.025,    
+    "time_step"    : 60.0,
+    "time_windows" : [60.0, 90.0, 120.0],
+    "min_period"   : 3.2, 
+    "max_period"   : 15.0,
+    "min_depth"    : 0.5,
+    "max_depth"    : 6.0,
+    "nRadius_K"    : 2,
+    "nRANSAC_K"    : 50,
+    "stdGammaC"    : 0.06,
+    "cRadius_Zb"    : 0.2
+}
