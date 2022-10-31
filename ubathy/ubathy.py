@@ -580,7 +580,7 @@ def ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite
     # plot mesh_B
     if verbosePlot:
         pathTMPPlot = os.path.join(pathFolderBathymetries, 'plots', 'mesh_B.png')
-        my.misc.bas.MakeFolder(os.path.split(pathTMPPlot)[0])
+        ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
         plt.plot(xsB, ysB, 'g.', markersize=0.4)
         plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
         plt.tight_layout()
