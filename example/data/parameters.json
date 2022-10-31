@@ -1,0 +1,23 @@
+{
+    "delta_M"      : 2.50,
+    "delta_K"      : 5.00,
+    "delta_B"      : 5.00,
+    "candes_iter"  : 50,
+    "DMD_or_EOF"   : "DMD",
+    "DMD_rank"     : 6,
+    "EOF_variance" : 0.025,    
+    "time_step"    : 30.0,
+    "time_windows" : [60.0, 90.0, 120.0],
+    "min_period"   : 3.00, 
+    "max_period"   : 15.0,
+    "min_depth"    : 0.5,
+    "max_depth"    : 6.0,
+    "nRadius_K"    : 3,
+    "cRadius_K"    : 0.6,
+    "nRANSAC_K"    : 50,
+    "stdGammaC"    : 0.075,
+    "cRadius_B"    : 0.2,
+    "Kalman_ini"   : "202007250800",
+    "Kalman_fin"   : "202008010900",
+    "var_per_day"  : 0.1
+}
