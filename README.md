@@ -374,7 +374,7 @@ UCalib is released under a [AGPL-3.0 license](https://github.com/Ulises-ICM-UPC/
       }
 
     @Online{ulisesbathy, 
-      author = {Simarro, Gonzalo and Calvete, Daniel and Nosequienmas},
+      author = {Simarro, Gonzalo and Calvete, Daniel},
       title = {UBathy},
       year = 2022,
       url = {https://github.com/Ulises-ICM-UPC/UBathy}
