@@ -2,8 +2,6 @@
 # Created on 2022 by Gonzalo Simarro and Daniel Calvete
 #'''
 #
-import ulises_ubathy as ulises
-#
 import copy
 import cv2
 import json
@@ -15,6 +13,11 @@ import scipy as sc
 from scipy import optimize
 from scipy import signal
 import sys
+#
+#
+#
+#
+import ulises_ubathy as ulises
 #
 grav = sc.constants.g
 #
@@ -288,20 +291,37 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
         csM, rsM = [np.round(item).astype(int) for item in [csM, rsM]]
         #
         # load the video corresponding to mesh_M
-        print('... loading video {:}'.format(video))
-        XAll = np.zeros((len(csM), len(ts)))
-        for posT in range(len(ts)):
-            img = cv2.imread(os.path.join(pathFolderVideos, video, fnsVideo[posT]))
-            XAll[:, posT] = img[rsM, csM, 1] / 255. # load green channel
+        wtMax, dtHilbert = np.max(par['time_windows']), par['max_period']
+        nWtMax, nHilbert = [int(item/dtsMean) for item in [wtMax, dtHilbert]] # there was a int()+1
+        assert nWtMax+2*nHilbert <= len(ts) # IMP*
         #
         # run through the video
-        wtMax, dtHilbert, nHilbert = np.max(par['time_windows']), par['max_period'], int(par['max_period']/dtsMean)+1
-        for posT in range(nHilbert, len(ts), max([1, int(par['time_step']/dtsMean)])):
-            if not (ts[posT]-dtHilbert>=0 and ts[posT]+wtMax+dtHilbert<=np.max(ts)): continue
+        for posT in range(0, len(ts), max([1, int(par['time_step']/dtsMean)])):
             #
-            # read lines for Hilbert-extended t-ball
-            possTBallEx = sorted(np.where((ts>=ts[posT]-dtHilbert) & (ts<=ts[posT]+wtMax+dtHilbert))[0])
-            XForTBallEx = XAll[:, possTBallEx]
+            if not (posT>=0 and posT+nWtMax+2*nHilbert<len(ts)-1): # leave a small margin
+                continue
+            #
+            print('... {:} decomposition for subvideo starting at t = {:5.1f}'.format(par['DMD_or_EOF'], ts[posT+nHilbert])) # IMP* +nHilbert
+            #
+            if posT == 0: # first case
+                XForTBallEx = np.zeros((len(csM), nWtMax+2*nHilbert))
+                possTLH = []
+                for posH in range(nWtMax+2*nHilbert):
+                    posTLH = posT + posH
+                    possTLH.append(posTLH)
+                    img = cv2.imread(os.path.join(pathFolderVideos, video, fnsVideo[posTLH]))
+                    XForTBallEx[:, posH] = img[rsM, csM, 1] / 255. # load green channel
+                posTOld, possTLHOld = [copy.deepcopy(item) for item in [posT, possTLH]]
+            else:
+                nTMP = posT - posTOld
+                XForTBallEx[:, 0:XForTBallEx.shape[1]-nTMP] = XForTBallEx[:, nTMP:XForTBallEx.shape[1]] # displaced nTMP
+                possTLH = []
+                for posH in range(nTMP):
+                    posTLH = possTLHOld[-1] + 1 + posH
+                    possTLH.append(posTLH)
+                    img = cv2.imread(os.path.join(pathFolderVideos, video, fnsVideo[posTLH]))
+                    XForTBallEx[:, XForTBallEx.shape[1]-nTMP+posH] = img[rsM, csM, 1] / 255. # load green channel
+                posTOld, possTLHOld = [copy.deepcopy(item) for item in [posT, possTLH]]
             #
             # perform RPCA and Hilbert
             if par['candes_iter'] > 0:
@@ -313,8 +333,8 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
             #
             # perform DMD/EOF for all 'time_windows'
             for wt in par['time_windows']:
-                print('... {:} decomposition for t = {:5.1f} and wt = {:5.1f}'.format(par['DMD_or_EOF'], ts[posT], wt))
-                fnOut0 = 't{:}_wt{:}'.format(str('{:3.2f}'.format(ts[posT])).zfill(8), str('{:3.2f}'.format(wt)).zfill(8))
+                print('... {:} decomposition for t = {:5.1f} and wt = {:5.1f}'.format(par['DMD_or_EOF'], ts[posT+nHilbert], wt)) # IMP* +nHilbert
+                fnOut0 = 't{:}_wt{:}'.format(str('{:3.2f}'.format(ts[posT+nHilbert])).zfill(8), str('{:3.2f}'.format(wt)).zfill(8)) # IMP* +nHilbert
                 #
                 # obtain positions for wt
                 possWt = range(0, np.min([int(wt/dtsMean), XForTBallHilbert.shape[1]]))

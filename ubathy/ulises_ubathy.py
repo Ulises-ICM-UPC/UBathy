@@ -1,10 +1,11 @@
 #
-# Fri Oct 28 15:42:08 2022, extract from Ulises by Gonzalo Simarro and Daniel Calvete
+# Fri Nov 11 15:06:55 2022, extract from Ulises by Gonzalo Simarro and Daniel Calvete
 #
 import copy
 import cv2
 import datetime
 import itertools
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 #
@@ -14,16 +15,16 @@ def AllVariables2MainSet(allVariables, nc, nr, options={}): # 202109141500 (last
     .- input nc and nr are integers or floats
     .- output mainSet is a dictionary
     '''
-    keys, defaultValues = ['orderOfTheHorizonPolynomial', 'radiusOfEarth', 'z0'], [5, 6.371e+6, 0.]
+    keys, defaultValues = ['orderOfHorizonPoly', 'radiusOfEarth'], [5, 6.371e+6]
     options = CompleteADictionary(options, keys, defaultValues)
-    allVariablesKeys = ['xc', 'yc', 'zc', 'ph', 'sg', 'ta', 'k1a', 'k2a', 'p1a', 'p2a', 'sca', 'sra', 'oc', 'or'] # WATCH OUT order matters
-    mainSet = {'nc':nc, 'nr':nr, 'orderOfTheHorizonPolynomial':options['orderOfTheHorizonPolynomial'], 'radiusOfEarth':options['radiusOfEarth'], 'z0':options['z0']}
-    allVariablesDictionary = Array2Dictionary(allVariablesKeys, allVariables)
-    allVariablesDictionary['sca'] = ClipWithSign(allVariablesDictionary['sca'], 1.e-8, 1.e+8)
-    allVariablesDictionary['sra'] = ClipWithSign(allVariablesDictionary['sra'], 1.e-8, 1.e+8)
-    allVariables = Dictionary2Array(allVariablesKeys, allVariablesDictionary)
-    mainSet['allVariablesDictionary'] = allVariablesDictionary
-    mainSet.update(allVariablesDictionary) # IMP* (absorb in mainSet all the keys which are in allVariablesDictionary)
+    allVariablesKeys = ['xc', 'yc', 'zc', 'ph', 'sg', 'ta', 'k1a', 'k2a', 'p1a', 'p2a', 'sca', 'sra', 'oc', 'or'] # IMP* order matters
+    mainSet = {'nc':nc, 'nr':nr, 'orderOfHorizonPoly':options['orderOfHorizonPoly'], 'radiusOfEarth':options['radiusOfEarth']}
+    allVariablesDict = Array2Dictionary(allVariablesKeys, allVariables)
+    allVariablesDict['sca'] = ClipWithSign(allVariablesDict['sca'], 1.e-8, 1.e+8)
+    allVariablesDict['sra'] = ClipWithSign(allVariablesDict['sra'], 1.e-8, 1.e+8)
+    allVariables = Dictionary2Array(allVariablesKeys, allVariablesDict)
+    mainSet['allVariablesDict'] = allVariablesDict
+    mainSet.update(allVariablesDict) # IMP* (absorb in mainSet all the keys which are in allVariablesDict)
     mainSet['allVariables'] = allVariables
     mainSet['pc'] = np.asarray([mainSet['xc'], mainSet['yc'], mainSet['zc']])
     R = EulerianAngles2R(mainSet['ph'], mainSet['sg'], mainSet['ta'])
@@ -38,7 +39,7 @@ def AllVariables2MainSet(allVariables, nc, nr, options={}): # 202109141500 (last
     mainSet['horizonLine'] = horizonLine
     mainSet.update(horizonLine) # IMP* (absorb in mainSet all the keys which are in horizonLine)
     return mainSet
-def ApplyAffineA01(A01, xs0, ys0): # 202111241134 (last read 2022-07-11)
+def ApplyAffineA01(A01, xs0, ys0): # 202111241134 (last read 2022-11-10)
     ''' comments:
     .- input A01 is a 6-float-ndarray (allows to transform from 0 to 1)
     .- input xs0 and ys0 are float-ndarrays of the same length
@@ -204,10 +205,10 @@ def CloudOfPoints2InnerPositionsForPolyline(xs, ys, polyline, options={}): # 202
     if DistanceFromAPointToAPoint(xsP[0], ysP[0], xsP[-1], ysP[-1]) < eps:
         xsP, ysP = [item[0:-1] for item in [xsP, ysP]]
     xsP, ysP, xsM, ysM = xsP - np.mean(xsP), ysP - np.mean(ysP), xs - np.mean(xsP), ys - np.mean(ysP)
-    possIn0 = [item for item in range(len(xsM)) if np.min(np.sqrt((xsM[item]-xsP)**2+(ysM[item]-ysP)**2)) < 1.e+2 * eps] # IMP* 1.e+2
+    possIn0 = [item for item in range(len(xsM)) if np.min(np.sqrt((xsM[item]-xsP)**2+(ysM[item]-ysP)**2)) < 1.e+5 * eps] # IMP* 1.e+5
     xsC, ysC, possMR0 = np.concatenate((xsP, xsM)), np.concatenate((ysP, ysM)), [item for item in range(len(xsM)) if item not in possIn0]
     while True:
-        xO, yO = [np.max(item) + (0.5 + np.random.random()) * (1.0 + np.std(item)) for item in [xsC, ysC]]
+        xO, yO = [np.max(item) + (2.5 + np.random.random()) * (5.0 + np.std(item)) for item in [xsC, ysC]]
         anglesP, anglesMR0 = np.angle((xO - xsP) + 1j * (yO - ysP)), np.angle((xO - xsM[possMR0]) + 1j * (yO - ysM[possMR0]))
         anglesP, anglesMR0 = np.meshgrid(anglesP, anglesMR0)
         anglesP, anglesMR0 = [np.reshape(item, -1) for item in [anglesP, anglesMR0]]
@@ -322,7 +323,7 @@ def CompleteImgMargins(imgMargins): # 202109101200 (last read 2022-07-05)
                 imgMargins[letter+number] = imgMargins[letter]
     imgMargins['isComplete'] = True
     return imgMargins
-def Date2Datenum(date): # 202109131100
+def Date2Datenum(date): # 202109131100 (last read 2022-11-10)
     ''' comments:
     .- input date is a 17-integer-string
     .- output datenum is a float (the unit is one day)
@@ -410,7 +411,7 @@ def EulerianAngles2UnitVectors(ph, sg, ta): # 202109231415 (last read 2022-06-29
     efz = -cta
     ef = np.asarray([efx, efy, efz])
     return eu, ev, ef
-def FindAffineA01(xs0, ys0, xs1, ys1): # 202111241134 (last read 2022-07-11)
+def FindAffineA01(xs0, ys0, xs1, ys1): # 202111241134 (last read 2022-11-10)
     ''' comments:
     .- input xs0, ys0, xs1 and ys1 are float-ndarrays of the same length (>= 3)
     .- output A01 is a 6-float-ndarray or None (if it does not succeed)
@@ -422,7 +423,7 @@ def FindAffineA01(xs0, ys0, xs1, ys1): # 202111241134 (last read 2022-07-11)
     A[poss1, 3], A[poss1, 4], A[poss1, 5], b[poss1] = xs0, ys0, np.ones(xs0.shape), ys1
     try:
         A01 = np.linalg.solve(np.dot(np.transpose(A), A), np.dot(np.transpose(A), b))
-    except:
+    except: # aligned points
         A01 = None
     return A01
 def GetWPhaseFitting(ts, fs, Rt, options={}): # 202105281430 (last read 2022-07-10)
@@ -439,7 +440,6 @@ def GetWPhaseFitting(ts, fs, Rt, options={}): # 202105281430 (last read 2022-07-
     for posT, t in enumerate(ts):
         if not (np.min(ts)+Rt <= ts[posT] <= np.max(ts)-Rt): # we want the whole neighborhood within ts
             continue
-        optionsTMP = {'radius':Rt, 'ordered':'byPosition'}
         possA = [posA for posA in range(len(ts)) if ts[posT]-Rt <= ts[posA] <= ts[posT]+Rt]
         A = np.ones((len(possA), 2)); A[:, 1] = ts[possA] - ts[posT]
         b = np.angle(fs[possA] * np.conj(fs[posT]))
@@ -488,12 +488,13 @@ def Kappa2MuOneStep(kappa): # 202207091901 (last read 2022-07-09)
     return mu
 def MainSet2HorizonLine(mainSet): # 202109141400 (last read 2022-07-06)
     ''' comments:
-    .- input mainSet is a dictionary (including at least 'nc', 'nr, 'zc', 'z0', 'radiusOfEarth', 'ef', 'xc', 'efx', 'yc', 'efy', 'Pa', 'orderOfTheHorizonPolynomial')
+    .- input mainSet is a dictionary (including at least 'nc', 'nr, 'zc', 'radiusOfEarth', 'ef', 'xc', 'efx', 'yc', 'efy', 'Pa', 'orderOfHorizonPoly')
     .- output horizonLine is a dictionary
     '''
+    z0 = 0.
     horizonLine = {key:mainSet[key] for key in ['nc', 'nr']}
-    bp = np.sqrt(2. * max([1.e-2, mainSet['zc'] - mainSet['z0']]) * mainSet['radiusOfEarth']) / np.sqrt(np.sum(mainSet['ef'][0:2] ** 2))
-    px, py, pz, vx, vy, vz = mainSet['xc'] + bp * mainSet['efx'], mainSet['yc'] + bp * mainSet['efy'], -max([1.e-2, mainSet['zc']-2.*mainSet['z0']]), -mainSet['efy'], +mainSet['efx'], 0.
+    bp = np.sqrt(2. * max([1.e-2, mainSet['zc'] - z0]) * mainSet['radiusOfEarth']) / np.sqrt(np.sum(mainSet['ef'][0:2] ** 2))
+    px, py, pz, vx, vy, vz = mainSet['xc'] + bp * mainSet['efx'], mainSet['yc'] + bp * mainSet['efy'], -max([1.e-2, mainSet['zc']-2.*z0]), -mainSet['efy'], +mainSet['efx'], 0.
     dc, cc = np.sum(mainSet['Pa'][0, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][0, 0:3] * np.asarray([px, py, pz])) + mainSet['Pa'][0, 3]
     dr, cr = np.sum(mainSet['Pa'][1, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][1, 0:3] * np.asarray([px, py, pz])) + mainSet['Pa'][1, 3]
     dd, cd = np.sum(mainSet['Pa'][2, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][2, 0:3] * np.asarray([px, py, pz])) + 1.
@@ -504,17 +505,17 @@ def MainSet2HorizonLine(mainSet): # 202109141400 (last read 2022-07-06)
     cUhs = np.linspace(-0.1 * mainSet['nc'], +1.1 * mainSet['nc'], 31, endpoint=True)
     rUhs = CUh2RUh(horizonLine, cUhs)
     cDhs, rDhs = CURU2CDRD(mainSet, cUhs, rUhs) # explicit
-    A = np.ones((len(cDhs), mainSet['orderOfTheHorizonPolynomial'] + 1))
-    for n in range(1, mainSet['orderOfTheHorizonPolynomial'] + 1):
+    A = np.ones((len(cDhs), mainSet['orderOfHorizonPoly'] + 1))
+    for n in range(1, mainSet['orderOfHorizonPoly'] + 1):
         A[:, n] = cDhs ** n
     b = rDhs
     try:
         horizonLine['ccDh'] = np.linalg.solve(np.dot(np.transpose(A), A), np.dot(np.transpose(A), b))
         if np.max(np.abs(b - np.dot(A, horizonLine['ccDh']))) > 5e-1: # IMP* WATCH OUT
-            horizonLine['ccDh'] = np.zeros(mainSet['orderOfTheHorizonPolynomial'] + 1)
+            horizonLine['ccDh'] = np.zeros(mainSet['orderOfHorizonPoly'] + 1)
             horizonLine['ccDh'][0] = 1.e+2 # IMP* WATCH OUT
     except:
-        horizonLine['ccDh'] = np.zeros(mainSet['orderOfTheHorizonPolynomial'] + 1)
+        horizonLine['ccDh'] = np.zeros(mainSet['orderOfHorizonPoly'] + 1)
         horizonLine['ccDh'][0] = 1.e+2 # IMP* WATCH OUT
     return horizonLine
 def MainSet2Pa(mainSet): # 202207061434 (last read 2022-07-06)
@@ -594,7 +595,7 @@ def Polyline2InnerHexagonalMesh(polyline, d, options={}): # 202205111346 (last r
     posIns = CloudOfPoints2InnerPositionsForPolyline(xsM, ysM, polyline, options={'epsilon':options['epsilon']})
     xsM, ysM = [item[posIns] for item in [xsM, ysM]]
     return xsM, ysM
-def Poss0AndPoss1InFind2DTransform(n): # 202207112001 (last read 2022-07-11)
+def Poss0AndPoss1InFind2DTransform(n): # 202207112001 (last read 2022-11-09)
     ''' comments:
     .- input n is an integer
     .- output poss0 and poss1 are integer-lists
@@ -626,17 +627,18 @@ def ReadMainSetFromCalTxt(pathCalTxt, options={}): # 202111171714 (read 2022-07-
     .- input pathCalTxt is a string
     .- output mainSet is a dictionary
     '''
-    keys, defaultValues = ['orderOfTheHorizonPolynomial', 'radiusOfEarth', 'z0'], [5, 6.371e+6, 0.]
+    keys, defaultValues = ['orderOfHorizonPoly', 'radiusOfEarth'], [5, 6.371e+6]
     options = CompleteADictionary(options, keys, defaultValues)
     allVariables, nc, nr = ReadCalTxt(pathCalTxt)[0:3]
-    mainSet = AllVariables2MainSet(allVariables, nc, nr, options={item:options[item] for item in ['orderOfTheHorizonPolynomial', 'radiusOfEarth', 'z0']})
+    mainSet = AllVariables2MainSet(allVariables, nc, nr, options={item:options[item] for item in ['orderOfHorizonPoly', 'radiusOfEarth']})
     return mainSet
-def ReadRectangleFromTxt(pathFile, options={}): # 202109141200
+def ReadRectangleFromTxt(pathFile, options={}): # 202109141200 (last read 2022-11-10) avoid its use -> np.loadtxt
     assert os.path.isfile(pathFile)
     keys, defaultValues = ['c0', 'c1', 'r0', 'r1', 'valueType', 'nullLine'], [0, 0, 0, 0, 'str', None]
     options = CompleteADictionary(options, keys, defaultValues)
     openedFile = open(pathFile, 'r')
     listOfLines = openedFile.readlines()
+    openedFile.close()
     if options['nullLine'] is not None:
         listOfLines = [item for item in listOfLines if item[0] != options['nullLine']]
     if not (options['r0'] == 0 and options['r1'] == 0): # if r0 == r1 == 0 it loads all the rows
