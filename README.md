@@ -4,7 +4,7 @@
 
 ### Description
 The algorithm for bathymetry estimation is based on extracting wave modes from videos of nearshore surface wave propagation. These videos can be formed either from raw camera images, which must have been previously calibrated, or from georeferenced planviews. For each wave mode extracted from the videos, the frequency and the spatially dependent wavenumbers are obtained. The bathymetries are obtained by fitting the surface waves dispersion relationship with the wavenumbers and frequencies of the different modes. Bathymetries estimated at different times are finally aggregated using a Kalman filter to obtain the final bathymetries. The videos may be recorded on Argus-type video monitoring stations and from moving cameras, such as drones or satellites. The calibration of these videos and the generation of planviews, which are necessary in the case of drones, can be done using the software [UBasic](https://github.com/Ulises-ICM-UPC/UBasic), [UCalib](https://github.com/Ulises-ICM-UPC/UCalib) or [UDrone](https://github.com/Ulises-ICM-UPC/UDrone). Details on the algorithm and methodology are described in
-> *Simarro, G.; Calvete, D. UBathy: a software to obtain the bathymetry from video imagery. Submitted for publication*
+> *Simarro, G.; Calvete, D. UBathy (v2.0): A Software to Obtain the Bathymetry from Video Imagery. Remote Sens. 2022, 14, 6139. https://doi.org/10.3390/rs14236139*
 
 The bathymetry estimation process consists of the following steps:
 
@@ -360,19 +360,26 @@ Contributions to this project are welcome. To do a clean pull request, please fo
 
 UCalib is released under a [AGPL-3.0 license](https://github.com/Ulises-ICM-UPC/UBathy/blob/master/LICENSE). If you use UDrone in an academic work, please cite:
 
-    @Article{rs11232722,
-      AUTHOR = {Simarro, Gonzalo and Calvete, Daniel and Luque, Pau and Orfila, Alejandro and Ribas, Francesca},
-      TITLE = {UBathy: A New Approach for Bathymetric Inversion from Video Imagery},
+    @Article{rs14236139,
+      AUTHOR = {Simarro, Gonzalo and Calvete, Daniel},
+      TITLE = {UBathy (v2.0): A Software to Obtain the Bathymetry from Video Imagery},
       JOURNAL = {Remote Sensing},
-      VOLUME = {11},
-      YEAR = {2019},
+      VOLUME = {14},
+      YEAR = {2022},
       NUMBER = {23},
-      ARTICLE-NUMBER = {2722},
-      URL = {https://www.mdpi.com/2072-4292/11/23/2722},
+      ARTICLE-NUMBER = {6139},
+      URL = {https://www.mdpi.com/2072-4292/14/23/6139},
       ISSN = {2072-4292},
-      DOI = {10.3390/rs11232722}
+      DOI = {10.3390/rs14236139}
       }
 
+    @Online{ubathyZenodo, 
+      author = {Simarro, Gonzalo and Calvete, Daniel},
+      title = {UBathy: A software to obtain the bathymetry from video imagery (version 2.0.0)},
+      year = 2022,
+      url = {10.5281/zenodo.7360216}
+      }
+    
     @Online{ulisesbathy, 
       author = {Simarro, Gonzalo and Calvete, Daniel},
       title = {UBathy},
