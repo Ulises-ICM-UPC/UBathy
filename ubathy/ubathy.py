@@ -560,7 +560,7 @@ def ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite
     #
     def GoalFunction220622(x, theArgs): # IMP*
         gammas, ws, zts, g = [theArgs[key] for key in ['gammas', 'ws', 'zts', 'g']]
-        gammasR = ws ** 2 / (grav * ulises.WGH2KOneStep(ws, grav, zts-x[0]))
+        gammasR = ws ** 2 / (g * ulises.WGH2KOneStep(ws, g, zts-x[0]))
         gf = np.sqrt(np.mean((gammasR - gammas) ** 2))
         return gf
     def interp_weights220622(xy, uv, d=2):
