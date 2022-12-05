@@ -358,7 +358,7 @@ Contributions to this project are welcome. To do a clean pull request, please fo
 
 ## License
 
-UBahty is released under a [AGPL-3.0 license](https://github.com/Ulises-ICM-UPC/UBathy/blob/master/LICENSE). If you use UBathy in an academic work, please cite:
+UBathy is released under a [AGPL-3.0 license](https://github.com/Ulises-ICM-UPC/UBathy/blob/master/LICENSE). If you use UBathy in an academic work, please cite:
 
     @Article{rs14236139,
       AUTHOR = {Simarro, Gonzalo and Calvete, Daniel},
