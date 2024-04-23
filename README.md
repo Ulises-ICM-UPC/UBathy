@@ -49,7 +49,7 @@ The structure of the project is the following:
       * `<anyname>cal.txt`
       * `<anyname>zs.txt`
       * or
-      * `<anyname>crxyz.txt`
+      * `<anyname>crxyz_planview.txt` or `<anyname>crxyz.txt`
     * **`groundTruth`**
       * `date01_GT_xyz.txt`
       * . . . 
@@ -147,8 +147,8 @@ This file can be obtained using the [UBasic](https://github.com/Ulises-ICM-UPC/U
 The coordinates of the camera position `(xc, yc, zc)` and the position of the water surface `(zs)` are referenced to the same coordinate system in which the bathymetries are to be obtained.
 
 #### Georeferenced planviews
-If the frames correspond to planviews, in the folder **`data/<videoFilename>`** there must exists the file `<anyname>crxyz.txt` with the correspondence between the planview corner pixels and the coordinate system in which the bathymetry is going to be obtained. The structure of this file is the following:
-* `<anyname>crxyz.txt`: One line for each corner pixel
+If the frames correspond to planviews, in the folder **`data/<videoFilename>`** there must exists the file `<anyname>crxyz_plaview.txt`(or `<anyname>crxyz.txt`) with the correspondence between the planview corner pixels and the coordinate system in which the bathymetry is going to be obtained. The structure of this file is the following:
+* `<anyname>crxyz_plaview.txt` or `<anyname>crxyz.txt`: One line for each corner pixel
 >`pixel-column`, `pixel-row`, `x-coordinate`, `y-coordinate`, `z-coordinate-free-surface`
 
 On previous files, quantities must be separated by at least one blank space between them and the last record should not be continued with a newline (return).

@@ -8,16 +8,22 @@ import sys
 sys.path.insert(0, 'ubathy')
 import ubathy as ubathy
 #
-pathFolderMain = 'example' # USER DEFINED
+pathFolderMain = 'example'
+#
+assert os.path.exists(pathFolderMain)
+#
+pathFolderData = os.path.join(pathFolderMain, 'data')
+pathFolderVideos = os.path.join(pathFolderMain, 'videos')
+pathFolderScratch = os.path.join(pathFolderMain, 'scratch')
+pathFolderBathymetries = os.path.join(pathFolderMain, 'bathymetries')
 #
 #''' --------------------------------------------------------------------------
 # Extraction of the videos
 #''' --------------------------------------------------------------------------
 #
-pathFolderVideos = os.path.join(pathFolderMain, 'videos') # USER DEFINED
 listOfVideos = [] # if [], takes all the available
 FPS = 0.0 # if 0.0, FPS is the video time resolution
-overwrite = False # USER DEFINED
+overwrite = False
 #
 print('Extraction of the videos')
 ubathy.Video2Frames(pathFolderVideos, listOfVideos, FPS, overwrite)
@@ -26,12 +32,8 @@ ubathy.Video2Frames(pathFolderVideos, listOfVideos, FPS, overwrite)
 # Creation of the meshes
 #''' --------------------------------------------------------------------------
 #
-pathFolderData = os.path.join(pathFolderMain, 'data')
-#pathFolderVideos = os.path.join(pathFolderMain, 'videos') # USER DEFINED
-pathFolderScratch = os.path.join(pathFolderMain, 'scratch')
-listOfVideos = [] # if [], takes all the available
-overwrite = False # USER DEFINED
-verbosePlot = True # USER DEFINED
+overwrite = False
+verbosePlot = True
 #
 print('Creation of the meshes')
 ubathy.CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVideos, overwrite, verbosePlot)
@@ -40,12 +42,8 @@ ubathy.CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
 # Decomposition of the videos
 #''' --------------------------------------------------------------------------
 #
-#pathFolderData = os.path.join(pathFolderMain, 'data') # USER DEFINED
-#pathFolderVideos = os.path.join(pathFolderMain, 'videos') # USER DEFINED
-#pathFolderScratch = os.path.join(pathFolderMain, 'scratch') # USER DEFINED
-#listOfVideos = [] # if [], takes all the available
-overwrite = False # USER DEFINED
-verbosePlot = True # USER DEFINED
+overwrite = False
+verbosePlot = True
 #
 print('Decomposition of the videos')
 ubathy.ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVideos, overwrite, verbosePlot)
@@ -54,9 +52,6 @@ ubathy.ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, list
 # Obtaining the wavenumbers
 #''' --------------------------------------------------------------------------
 #
-#pathFolderData = os.path.join(pathFolderMain, 'data') # USER DEFINED
-#pathFolderScratch = os.path.join(pathFolderMain, 'scratch') # USER DEFINED
-#listOfVideos = [] # if [], takes all the available # USER DEFINED
 overwrite = False
 verbosePlot = True
 #
@@ -67,11 +62,8 @@ ubathy.ObtainK(pathFolderData, pathFolderScratch, listOfVideos, overwrite, verbo
 # Obtaining the bathymetry
 #''' --------------------------------------------------------------------------
 #
-#pathFolderData = os.path.join(pathFolderMain, 'data') # USER DEFINED
-#pathFolderScratch = os.path.join(pathFolderMain, 'scratch') # USER DEFINED
-#pathFolderBathymetries = os.path.join(pathFolderMain, 'bathymetries') # USER DEFINED
-overwrite = False # USER DEFINED
-verbosePlot = True # USER DEFINED
+overwrite = False
+verbosePlot = True
 #
 print('Obtaining the bathymetry')
 ubathy.ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite, verbosePlot)
@@ -80,9 +72,10 @@ ubathy.ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwr
 # Filtering (Kalman) the bathymetries
 #''' --------------------------------------------------------------------------
 #
-#pathFolderData = os.path.join(pathFolderMain, 'data') # USER DEFINED
-pathFolderBathymetries = os.path.join(pathFolderMain, 'bathymetries_Kalman') # USER DEFINED
+pathFolderBathymetries = os.path.join(pathFolderMain, 'bathymetries_Kalman')
+#
 verbosePlot = True
 #
 print('Filtering (Kalman) the bathymetry')
 ubathy.PerformKalman(pathFolderData, pathFolderBathymetries, verbosePlot)
+#
