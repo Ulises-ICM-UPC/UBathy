@@ -5,6 +5,7 @@
 import copy
 import cv2
 import json
+import matplotlib; matplotlib.use('TKAgg')
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -13,9 +14,6 @@ import scipy as sc
 from scipy import optimize
 from scipy import signal
 import sys
-#
-#
-#
 #
 import ulises_ubathy as ulises
 #
@@ -46,13 +44,13 @@ def Video2Frames(pathFolderVideos, listOfVideos, fps, overwrite): # last read 20
         if fps > fpsOfVideo:
             print('*** required fps ({:3.2f}) larger than actual fps of the video ({:3.2f})'.format(fps, fpsOfVideo)); sys.exit()
         elif fps == 0:
-            fps = fpsOfVideo
+            fpsTMP = fpsOfVideo
         else: # 0 < fps <= fpsOfVideo so that int(fpsOfVideo / fps) >= 1
-            fps = fpsOfVideo / int(fpsOfVideo / fps) # to ensure that fpsOfVideo is multiple of fps
+            fpsTMP = fpsOfVideo / int(fpsOfVideo / fps) # to ensure that fpsOfVideo is multiple of fps
         #
         # write frames
-        print('... frame extraction of video {:} from {:} at {:3.2f} fps'.format(video, videoFn, fps))
-        ulises.Video2Snaps(pathVideo, pathFolderSnaps, fps, options={})
+        print('... frame extraction of video {:} from {:} at {:3.2f} fps'.format(video, videoFn, fpsTMP))
+        ulises.Video2Snaps(pathVideo, pathFolderSnaps, fpsTMP, options={})
         #
     return None
 #
@@ -90,7 +88,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
             plt.plot(xsB, ysB, 'g.', markersize=0.4)
             plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
             plt.tight_layout()
-            plt.savefig(pathTMPPlot, dpi=100); plt.close()
+            plt.savefig(pathTMPPlot, dpi=100); plt.clf()
     else:
         print('... mesh_B was already created')
     #
@@ -107,7 +105,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
         # obtain paths and identify if it is a video of planviews or made up of oblique images
         pathCalTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('cal.txt')]
         pathZsTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('zs.txt')]
-        pathPlwTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('crxyz.txt')]
+        pathPlwTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('crxyz.txt') or item.endswith('crxyz_planview.txt')]
         if len(pathCalTxts) > 0 and len(pathZsTxts) > 0:
             isPlw, pathCalTxt, pathZsTxt = False, pathCalTxts[0], pathZsTxts[0]
         elif len(pathPlwTxts) > 0:
@@ -178,7 +176,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
                 plt.plot(xsM, ysM, 'g.', markersize=0.4)
                 plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
                 plt.tight_layout()
-                plt.savefig(pathTMPPlot, dpi=100); plt.close()
+                plt.savefig(pathTMPPlot, dpi=100); plt.clf()
                 #
                 pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_M_inImage.png')
                 pathsImg = [os.path.join(pathFolderVideos, video, item) for item in os.listdir(os.path.join(pathFolderVideos, video)) if os.path.splitext(item)[1][1:] in extsImg]
@@ -225,7 +223,7 @@ def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVide
                 plt.plot(xsK, ysK, 'g.', markersize=0.4)
                 plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
                 plt.tight_layout()
-                plt.savefig(pathTMPPlot, dpi=100); plt.close()
+                plt.savefig(pathTMPPlot, dpi=100); plt.clf()
                 #
                 pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_K_inImage.png')
                 pathsImg = [os.path.join(pathFolderVideos, video, item) for item in os.listdir(os.path.join(pathFolderVideos, video)) if os.path.splitext(item)[1][1:] in extsImg]
@@ -301,7 +299,7 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
             if not (posT>=0 and posT+nWtMax+2*nHilbert<len(ts)-1): # leave a small margin
                 continue
             #
-            print('... {:} decomposition for subvideo starting at t = {:5.1f}'.format(par['DMD_or_EOF'], ts[posT+nHilbert])) # IMP* +nHilbert
+            print('... {:} decomposition for subvideo starting at t = {:5.1f} for video {:}'.format(par['DMD_or_EOF'], ts[posT+nHilbert], video)) # IMP* +nHilbert
             #
             if posT == 0: # first case
                 XForTBallEx = np.zeros((len(csM), nWtMax+2*nHilbert))
@@ -400,7 +398,7 @@ def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfV
                         #
                         plt.tight_layout()
                         plt.savefig(pathTMPPlot, dpi=100)
-                        plt.close('all')
+                        plt.clf()
     #
     return None
 #
@@ -552,7 +550,7 @@ def ObtainK(pathFolderData, pathFolderScratch, listOfVideos, overwrite, verboseP
                 plt.tight_layout()
                 ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
                 plt.savefig(pathTMPPlot, dpi=100)
-                plt.close('all')
+                plt.clf()
     #
     return None
 #
@@ -604,7 +602,7 @@ def ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite
         plt.plot(xsB, ysB, 'g.', markersize=0.4)
         plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
         plt.tight_layout()
-        plt.savefig(pathTMPPlot, dpi=100); plt.close()
+        plt.savefig(pathTMPPlot, dpi=100); plt.clf()
     #
     for date in dates:
         #
@@ -755,7 +753,7 @@ def ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite
             plt.tight_layout()
             plt.savefig(pathTMPPlot0, dpi=100)
             plt.savefig(pathTMPPlot1, dpi=100)
-            plt.close()
+            plt.clf()
     #
     return None
 #
@@ -840,6 +838,6 @@ def PerformKalman(pathFolderData, pathFolderBathymetries, verbosePlot): # last r
             #
             plt.tight_layout()
             plt.savefig(pathTMPPlot, dpi=100)
-            plt.close('all')
+            plt.clf()
     #
     return None
