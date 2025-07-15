@@ -1,843 +1,731 @@
-#'''
-# Created on 2022 by Gonzalo Simarro and Daniel Calvete
-#'''
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~ by Gonzalo Simarro and Daniel Calvete
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 import copy
-import cv2
+import cv2  # type: ignore
 import json
-import matplotlib; matplotlib.use('TKAgg')
-import matplotlib.pyplot as plt
-import numpy as np
+import numpy as np  # type: ignore
 import os
-import random
-import scipy as sc
-from scipy import optimize
-from scipy import signal
+import scipy as sc  # type: ignore
+from scipy import optimize  # type: ignore
+from scipy import signal  # type: ignore
+from scipy.interpolate import griddata  # type: ignore
 import sys
 #
-import ulises_ubathy as ulises
+import ulises_ubathy as uli  # type: ignore
 #
-grav = sc.constants.g
+# ~~~~~~ data ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-def Video2Frames(pathFolderVideos, listOfVideos, fps, overwrite): # last read 2022-10-28
+rangeC, grav = 'close', sc.constants.g
+extsVids, extsImgs = ['mp4', 'avi', 'mov'], ['jpeg', 'jpg', 'png']
+dGit = uli.GHLoadDGit()
+#
+# ~~~~~~ main ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+def Inform_UBathy(pathFldMain, pos):  # lm:2025-06-08; lr:2025-07-08
     #
-    # obtain video filenames videoFns
-    extsVid = ['mp4', 'MP4', 'avi', 'AVI', 'mov', 'MOV']
-    videoFns = sorted([item for item in os.listdir(pathFolderVideos) if os.path.splitext(item)[1][1:] in extsVid])
-    if len(listOfVideos) > 0: # (the videos in listOfVideos DO NOT have extension; a videoFn in videoFns DOES have)
-        videoFns = [item for item in videoFns if os.path.splitext(item)[0] in listOfVideos]
-    if len(videoFns) == 0:
-        print('... no video-files to extract frames from')
+    # obtain par and inform
+    par = uli.GHLoadPar(pathFldMain)
+    uli.GHInform_2506('UBathy', pathFldMain, par, pos, margin=dGit['ind'], sB='', nFill=10)
     #
-    # obtain frames from videos
-    for videoFn in videoFns:
-        pathVideo = os.path.join(pathFolderVideos, videoFn)
-        #
-        # obtain pathFolderSnaps and manage overwrite
-        video = os.path.splitext(videoFn)[0]
-        pathFolderSnaps = os.path.join(pathFolderVideos, video)
-        if os.path.isdir(pathFolderSnaps) and not overwrite:
-           print('... frame extraction for video {:} was already performed (the video folder exists)'.format(video)); continue
-        #
-        # load video and obtain fps
-        fpsOfVideo = cv2.VideoCapture(pathVideo).get(cv2.CAP_PROP_FPS)
-        if fps > fpsOfVideo:
-            print('*** required fps ({:3.2f}) larger than actual fps of the video ({:3.2f})'.format(fps, fpsOfVideo)); sys.exit()
-        elif fps == 0:
-            fpsTMP = fpsOfVideo
-        else: # 0 < fps <= fpsOfVideo so that int(fpsOfVideo / fps) >= 1
-            fpsTMP = fpsOfVideo / int(fpsOfVideo / fps) # to ensure that fpsOfVideo is multiple of fps
-        #
-        # write frames
-        print('... frame extraction of video {:} from {:} at {:3.2f} fps'.format(video, videoFn, fpsTMP))
-        ulises.Video2Snaps(pathVideo, pathFolderSnaps, fpsTMP, options={})
-        #
     return None
 #
-def CreateMeshes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVideos, overwrite, verbosePlot): # last read 2022-10-28
+def Video2Frames(pathFldMain):  # lm:2025-07-08; lr:2025-07-08
     #
-    extsImg = ['jpg', 'JPG', 'jpeg', 'JPEG', 'png', 'PNG']
+    # obtain par and videos
+    par, videos = uli.GHBathyParAndVideos(pathFldMain)
     #
-    # load parameters
-    pathTMP = os.path.join(pathFolderData, 'parameters.json')
-    with open(pathTMP, 'r') as f:
-        par = json.load(f)
-    #
-    # load boundary of the domain where to obtain the bathymetry
-    pathTMP = os.path.join(pathFolderData, 'xy_boundary.txt')
-    dataTMP = np.asarray(ulises.ReadRectangleFromTxt(pathTMP, options={'c1':2, 'valueType':'float'}))
-    xsBoun, ysBoun = [dataTMP[:, item] for item in range(2)]
-    #
-    # create, write and load mesh_B (depends exclusively on xy_boundary)
-    pathTMP = os.path.join(pathFolderScratch, 'mesh_B.npz')
-    if not os.path.exists(pathTMP) or overwrite:
-        print('... creating mesh_B')
-        #
-        # create mesh_B
-        xsB, ysB = ulises.Polyline2InnerHexagonalMesh({'xs':xsBoun, 'ys':ysBoun}, par['delta_B'], options={})
-        #
-        # write mesh_B in npz
-        ulises.MakeFolder(os.path.split(pathTMP)[0])
-        np.savez(pathTMP, xs=xsB, ys=ysB)
-        #
-        # plot mesh_B
-        if verbosePlot:
-            pathTMPPlot = os.path.join(pathFolderScratch, 'plots', 'mesh_B.png')
-            ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-            plt.plot(list(xsBoun) + [xsBoun[0]], list(ysBoun) + [ysBoun[0]], 'r-', lw=5)
-            plt.plot(xsB, ysB, 'g.', markersize=0.4)
-            plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
-            plt.tight_layout()
-            plt.savefig(pathTMPPlot, dpi=100); plt.clf()
-    else:
-        print('... mesh_B was already created')
-    #
-    # obtain listOfVideos
-    listOfVideosTMP = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
-    if len(listOfVideos) > 0:
-        listOfVideos = [item for item in listOfVideosTMP if item in listOfVideos]
-    else:
-        listOfVideos = copy.deepcopy(listOfVideosTMP)
-    #
-    # create and write mesh_M and mesh_K for each video (depends on xy_boundary but also on the video)
-    for video in listOfVideos:
-        #
-        # obtain paths and identify if it is a video of planviews or made up of oblique images
-        pathCalTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('cal.txt')]
-        pathZsTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('zs.txt')]
-        pathPlwTxts = [os.path.join(pathFolderData, video, item) for item in os.listdir(os.path.join(pathFolderData, video)) if item.endswith('crxyz.txt') or item.endswith('crxyz_planview.txt')]
-        if len(pathCalTxts) > 0 and len(pathZsTxts) > 0:
-            isPlw, pathCalTxt, pathZsTxt = False, pathCalTxts[0], pathZsTxts[0]
-        elif len(pathPlwTxts) > 0:
-            isPlw, pathPlwTxt = True, pathPlwTxts[0]
+    # extract frames for videos
+    for video in videos:
+        print("{}{} Extracting frames from video {}".format(' '*dGit['ind'], dGit['sB1'], video))
+        pathFldFrames = uli.GHBathyExtractVideoToPathFldFrames(pathFldMain, video, extsVids=extsVids, fps=par['frame_rate'], extImg='png', overwrite=par['overwrite_outputs'])  # IMP*: png
+        if uli.IsFldModified_2506(pathFldFrames):
+            print("\033[F\033[K{}{} Video {} successfully processed: {} frames extracted {}".format(' '*dGit['ind'], dGit['sB1'], video, len(os.listdir(pathFldFrames)), dGit['sOK']))
         else:
-            print('*** missing calibration, free surface or planview definition files in folder {:}'.format(os.path.join(pathFolderData, video))); sys.exit()
+            print("\033[F\033[K{}{} Video {} was already processed: {} frames found {}".format(' '*dGit['ind'], dGit['sB1'], video, len(os.listdir(pathFldFrames)), dGit['sOK']))
+    #
+    return None
+#
+def CreateMeshes(pathFldMain):  # lm:2025-06-26; lr:2025-06-30
+    #
+    # obtain par and videos
+    par, videos = uli.GHBathyParAndVideos(pathFldMain)
+    #
+    # obtain xsBoun, ysBoun and plBoun; polygon; boundary of the domain where to obtain the bathymetry
+    pathBounTxt = os.path.join(pathFldMain, 'data', 'boundary_xy.txt')  # IMP*: nomenclature
+    try:
+        dataTMP = np.loadtxt(pathBounTxt, usecols=range(2), dtype=float, ndmin=2)
+        xsBoun, ysBoun = [dataTMP[:, item] for item in range(2)]
+        plBoun = {'xs': xsBoun, 'ys': ysBoun}
+    except Exception:
+        print("! Unable to read {} {}".format(pathBounTxt, dGit['sKO']))
+        sys.exit()
+    #
+    # create and write mesh_B; depends only on plBoun
+    print("{}{} Creating mesh_B (bathymetry mesh)".format(' '*dGit['ind'], dGit['sB1']))
+    pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'mesh_B.txt')  # IMP*: nomenclature
+    if not os.path.exists(pathTMPTxt) or par['overwrite_outputs']:
+        # obtain xsB and ysB
+        xsB, ysB = uli.Polyline2InnerHexagonalMesh_2506(plBoun, par['delta_B'])
+        # write pathTMPTxt
+        os.makedirs(os.path.dirname(pathTMPTxt), exist_ok=True)
+        with open(pathTMPTxt, 'w') as fileout:
+            for posB in range(len(xsB)):
+                fileout.write('{:15.3f} {:15.3f}\n'.format(xsB[posB], ysB[posB]))  # IMP*: formatting
+        # write pathScrJpg
+        pathScrJpg = os.path.join(pathFldMain, 'output', 'plots', 'mesh_B.png')  # IMP*: nomenclature
+        uli.GHBathyPlotMesh(pathScrJpg, xsB, ysB, dGit['fs'], dGit['fs'], dGit['fontsize'], dpi=dGit['dpiHQ'], xsBoun=xsBoun, ysBoun=ysBoun)
+        # inform
+        print("\033[F\033[K{}{} Mesh_B (bathymetry mesh) successfully created: {} points {}".format(' '*dGit['ind'], dGit['sB1'], len(xsB), dGit['sOK']))
+    else:
+        # inform
+        nOfPoints = len(np.loadtxt(pathTMPTxt, usecols=range(2), dtype=float, ndmin=2)[:, 0])
+        print("\033[F\033[K{}{} Mesh_B (bathymetry mesh) was already available: {} points {}".format(' '*dGit['ind'], dGit['sB1'], nOfPoints, dGit['sOK']))
+    #
+    # create and write mesh_M and mesh_K for each video; IMP*: ztsK and ztsM correspond to the free surface
+    for video in videos:
         #
-        # create and write mesh_M
-        pathTMP = os.path.join(pathFolderScratch, video, 'mesh_M.npz')
-        if not os.path.exists(pathTMP) or overwrite:
-            print('... creating mesh_M for video {:}'.format(video))
+        # obtain isPlw and load basics, including zSea
+        pathFldDVideo = os.path.join(pathFldMain, 'data', 'videos', video)
+        pathsPlwTxts = [item.path for item in os.scandir(pathFldDVideo) if 'crxyz' in item.name and item.name.endswith('.txt')]  # IMP*: nomenclature
+        pathsCalTxts = [item.path for item in os.scandir(pathFldDVideo) if item.name.endswith('cal.txt')]  # IMP*: nomenclature
+        pathsZsTxts = [item.path for item in os.scandir(pathFldDVideo) if item.name.endswith('zs.txt')]  # IMP*: nomenclature
+        if (len(pathsPlwTxts) == 1) == (len(pathsCalTxts) == len(pathsZsTxts) == 1):  # one, and only one, must be true
+            print("! Invalid .txt files for video {} {}".format(video, dGit['sKO']))
+            sys.exit()
+        if len(pathsPlwTxts) == 1:
+            # load pathPlwTxt
+            isPlw, pathPlwTxt = True, pathsPlwTxts[0]
+            dataTMP = np.loadtxt(pathPlwTxt, usecols=range(5), dtype=float, ndmin=2)
+            csPlw, rsPlw, xsPlw, ysPlw, zsPlw = [dataTMP[:, item] for item in range(5)]
+            if np.std(zsPlw) > 1.e-3:  # WATCH OUT: epsilon
+                print("! Invalid z values found in crxyz-txt file for video {}: z must be constant {}".format(video, dGit['sKO']))
+                sys.exit()
+            zSea = np.mean(zsPlw)  # IMP*
+            if not np.allclose(csPlw, np.round(csPlw)) or not np.allclose(rsPlw, np.round(rsPlw)):
+                print("! Invalid c/r values found in crxyz-txt file for video {}: c and r must be integers {}".format(video, dGit['sKO']))
+                sys.exit()
+            csPlw, rsPlw = [np.round(item).astype(int) for item in [csPlw, rsPlw]]
+            # obtain affine
+            ACR2XYPlw = uli.FindAffineA01_2504(csPlw, rsPlw, xsPlw, ysPlw)
+            xsPlwR, ysPlwR = uli.ApplyAffineA01_2504(ACR2XYPlw, csPlw, rsPlw)
+            if np.max(np.hypot(xsPlwR - xsPlw, ysPlwR - ysPlw)) > 1.e-3:  # WATCH OUT: epsilon
+                print("! Invalid c/r/x/y values found in crxyz-txt file for video {}: c, r, x, and y must correspond to an affine transformation {}".format(video, dGit['sKO']))
+                sys.exit()
+            AXY2CRPlw = uli.FindAffineA01_2504(xsPlw, ysPlw, csPlw, rsPlw)
+        else:
+            isPlw, pathCalTxt, pathZsTxt = False, pathsCalTxts[0], pathsZsTxts[0]
+            dMCS = uli.LoadDMCSFromCalTxt_2502(pathCalTxt, rangeC, incHor=False)
+            zSea = np.loadtxt(pathZsTxt, dtype=float)  # IMP*
+        #
+        # load imgFrame
+        pathFldFrames = uli.GHBathyExtractVideoToPathFldFrames(pathFldMain, video, active=False)
+        if par['generate_scratch_plots']:
+            pathsImgs = [item.path for item in os.scandir(pathFldFrames) if os.path.splitext(item.name)[1][1:] in extsImgs]
+            if len(pathsImgs) == 0:
+                print("! Unable to read frames for video {} {}".format(video, dGit['sKO']))
+                sys.exit()
+            imgFrame = cv2.imread(pathsImgs[0])  # WATCH OUT: the first one for instance
+        #
+        # obtain and write mesh_M; within the bathymetry boundary and within the planview/image ?BUFFER ZONE?
+        print("{}{} Creating mesh_M (mode-decomposition mesh) for video {}".format(' '*dGit['ind'], dGit['sB1'], video))
+        pathTMPNpz = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_M.npz')  # IMP*: nomenclature
+        if not os.path.exists(pathTMPNpz) or par['overwrite_outputs']:
             #
-            # create initial mesh_M
-            if isPlw: # pixels correspond to the planview and are integers
-                dataTMP = np.asarray(ulises.ReadRectangleFromTxt(pathPlwTxt, {'c1':5, 'valueType':'float'}))
-                csC, rsC, xsC, ysC, zsC = [dataTMP[:, item] for item in range(5)]; assert np.std(zsC) < 1.e-3
-                csC, rsC = [np.round(item).astype(int) for item in [csC, rsC]]
-                mcsM, mrsM = np.meshgrid(np.arange(min(csC), max(csC)+1), np.arange(min(rsC), max(rsC)+1)) # IMP
+            # obtain initial mesh_M
+            if isPlw:  # pixels, integers, correspond to the planview
+                # obtain csM, rsM, xsM, ysM and ztsM
+                mcsM, mrsM = np.meshgrid(np.arange(min(csPlw), max(csPlw)+1), np.arange(min(rsPlw), max(rsPlw)+1))  # IMP*: max included
                 csM, rsM = [np.reshape(item, -1) for item in [mcsM, mrsM]]
-                (xsM, ysM), zsM = ulises.ApplyAffineA01(ulises.FindAffineA01(csC, rsC, xsC, ysC), csM, rsM), np.mean(zsC) * np.ones(len(csM))
-            else: # pixels correspond to the oblique image and are integers
-                #
-                # load zt and obtain mesh in xy
-                zt = ulises.ReadRectangleFromTxt(pathZsTxt, {'c1':1, 'valueType':'float'})[0]
-                xsM, ysM = ulises.Polyline2InnerHexagonalMesh({'xs':xsBoun, 'ys':ysBoun}, par['delta_M'], options={})
-                #
-                # obtain mesh in cr
-                mainSet = ulises.ReadMainSetFromCalTxt(pathCalTxt, options={})
-                csM, rsM, possGood = ulises.XYZ2CDRD(mainSet, xsM, ysM, zt*np.ones(len(xsM)), options={'returnGoodPositions':True})
-                csM, rsM = [np.round(item[possGood]).astype(int) for item in [csM, rsM]] # IMP*
-                #
-                # retain only unique points in cr
-                auxs = list(set(zip(csM, rsM))) # unique, interesting
-                csM, rsM = np.asarray([item[0] for item in auxs]), np.asarray([item[1] for item in auxs])
-                #
-                # obtain mesh in xy from cr
-                xsM, ysM, possGood = ulises.CDRDZ2XY(mainSet, csM, rsM, zt*np.ones(len(csM)), options={'returnGoodPositions':True})
-                csM, rsM, xsM, ysM = [item[possGood] for item in [csM, rsM, xsM, ysM]]
-                #
-                # sort mesh in xy using the distance to (x0, y0)
+                (xsM, ysM), ztsM = uli.ApplyAffineA01_2504(ACR2XYPlw, csM, rsM), zSea * np.ones(csM.shape)
+            else:  # pixels, integers, correspond to the oblique image
+                # obtain initial mesh in xyz
+                xsM, ysM = uli.Polyline2InnerHexagonalMesh_2506(plBoun, par['delta_M'])
+                ztsM = zSea * np.ones(xsM.shape)
+                # obtain initial mesh in cr
+                csM, rsM, possG = uli.XYZ2CDRD_2410(xsM, ysM, ztsM, dMCS, rtrnPossG=True, margin=0)
+                csM, rsM = [np.round(item[possG]).astype(int) for item in [csM, rsM]]  # IMP*: integers
+                # obtain updated mesh in cr
+                csM, rsM = map(np.asarray, zip(*dict.fromkeys(zip(csM, rsM))))  # IMP*: eliminates duplicates
+                # obtain updated mesh in xyz and cr
+                ztsM = zSea * np.ones(csM.shape)
+                xsM, ysM, possG = uli.CDRDZ2XY_2410(csM, rsM, ztsM, dMCS, rtrnPossG=True, margin=0)
+                csM, rsM, xsM, ysM, ztsM = [item[possG] for item in [csM, rsM, xsM, ysM, ztsM]]
+                # sort mesh using the distance to (x0, y0)
                 xC, yC = np.mean(xsM), np.mean(ysM)
-                dC = np.sqrt((xC - mainSet['xc']) ** 2 + (yC - mainSet['yc']) ** 2)
-                x0, y0 = xC + 5000 * (xC - mainSet['xc']) / dC, yC + 5000 * (yC - mainSet['yc']) / dC # IMP*
-                possSorted = np.argsort((xsM - x0) ** 2 + (ysM - y0) ** 2)
-                csM, rsM, xsM, ysM = [item[possSorted] for item in [csM, rsM, xsM, ysM]]
-                #
-                # obtain uniformized mesh in crxyz
-                csMu, rsMu, xsMu, ysMu = [np.asarray([item[0]]) for item in [csM, rsM, xsM, ysM]] # initialize with the first point
-                for pos in range(1, len(csM)): # potential point to the final mesh
-                    cM, rM, xM, yM = [item[pos] for item in [csM, rsM, xsM, ysM]]
-                    if np.min((xM - xsMu) ** 2 + (yM - ysMu) ** 2) >= (0.95 * par['delta_M']) ** 2:
-                        csMu, rsMu, xsMu, ysMu = np.append(csMu, cM), np.append(rsMu, rM), np.append(xsMu, xM), np.append(ysMu, yM)
-                csM, rsM, xsM, ysM, zsM = csMu, rsMu, xsMu, ysMu, zt*np.ones(len(csMu))
+                dC = np.hypot(xC - dMCS['xc'], yC - dMCS['yc'])
+                x0, y0 = xC + 5000 * (xC - dMCS['xc']) / dC, yC + 5000 * (yC - dMCS['yc']) / dC  # IMP*
+                possS = np.argsort(np.hypot(xsM - x0, ysM - y0))
+                csM, rsM, xsM, ysM, ztsM = [item[possS] for item in [csM, rsM, xsM, ysM, ztsM]]
+                # obtain updated mesh in xyz and cr; uniformized in xy
+                csMu, rsMu, xsMu, ysMu, ztsMu = [[item[0]] for item in [csM, rsM, xsM, ysM, ztsM]]
+                for pos in range(1, len(csM)):  # potential point to the final mesh
+                    if np.min(np.hypot(xsM[pos] - xsMu, ysM[pos] - ysMu)) >= 0.95 * par['delta_M']:
+                        for L, item in zip([csMu, rsMu, xsMu, ysMu, ztsMu], [csM, rsM, xsM, ysM, ztsM]): L.append(item[pos])
+                csM, rsM, xsM, ysM, ztsM = map(np.asarray, [csMu, rsMu, xsMu, ysMu, ztsMu])
             #
-            # retain only the points within the bathymetry boundary (useful, indeed, for isPlw)
-            possIn = ulises.CloudOfPoints2InnerPositionsForPolyline(xsM, ysM, {'xs':xsBoun, 'ys':ysBoun}, options={})
-            csM, rsM, xsM, ysM, zsM = [item[possIn] for item in [csM, rsM, xsM, ysM, zsM]]
+            # update mesh_M; within the bathymetry boundary
+            possI = uli.CloudOfPoints2PossInsidePolyline_2508(xsM, ysM, plBoun)
+            csM, rsM, xsM, ysM, ztsM = [item[possI] for item in [csM, rsM, xsM, ysM, ztsM]]
             #
-            # write mesh_M in npz
-            ulises.MakeFolder(os.path.split(pathTMP)[0])
-            np.savez(pathTMP, cs=csM, rs=rsM, xs=xsM, ys=ysM, zs=zsM)
+            # write pathTMPNpz
+            os.makedirs(os.path.dirname(pathTMPNpz), exist_ok=True)
+            np.savez(pathTMPNpz, cs=csM, rs=rsM, xs=xsM, ys=ysM, zts=ztsM)  # IMP*: nomenclature
             #
-            # plot mesh_M
-            if verbosePlot:
-                pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_M.png')
-                ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                plt.plot(list(xsBoun) + [xsBoun[0]], list(ysBoun) + [ysBoun[0]], 'r-', lw=5)
-                plt.plot(xsM, ysM, 'g.', markersize=0.4)
-                plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
-                plt.tight_layout()
-                plt.savefig(pathTMPPlot, dpi=100); plt.clf()
-                #
-                pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_M_inImage.png')
-                pathsImg = [os.path.join(pathFolderVideos, video, item) for item in os.listdir(os.path.join(pathFolderVideos, video)) if os.path.splitext(item)[1][1:] in extsImg]
-                if len(pathsImg) > 0:
-                    img = cv2.imread(pathsImg[0])
-                    img = ulises.DisplayCRInImage(img, csM, rsM, options={'colors':[[0, 255, 0]], 'size':1.5})
-                    ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                    cv2.imwrite(pathTMPPlot, img)
-                else:
-                    print('... no images in folder {:} to plot {:}'.format(os.path.join(pathFolderVideos, video), pathTMPPlot))
+            # write pathsJpgTMPs
+            if par['generate_scratch_plots']:
+                # mesh in xy
+                pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'mesh_M.jpg')  # IMP*: nomenclature
+                uli.GHBathyPlotMesh(pathScrJpg, xsM, ysM, dGit['fs'], dGit['fs'], dGit['fontsize'], dpi=dGit['dpiLQ'], xsBoun=xsBoun, ysBoun=ysBoun)
+                # mesh in imgFrame
+                pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'in_image_mesh_M.jpg')  # IMP*: nomenclature
+                uli.DisplayCRInImage_2504(imgFrame, csM, rsM, colors=[[0, 255, 255]], margin=0, factor=0.1, pathOut=pathScrJpg)
+            #
+            # inform
+            print("\033[F\033[K{}{} Mesh_M (mode-decomposition mesh) for video {} successfully generated: {} points {}".format(' '*dGit['ind'], dGit['sB1'], video, len(csM), dGit['sOK']))
         else:
-            print('... mesh_M for video {:} was already created'.format(video))
+            # inform
+            print("\033[F\033[K{}{} Mesh_M (mode-decomposition mesh) for video {} was already available: {} points {}".format(' '*dGit['ind'], dGit['sB1'], video, len(np.load(pathTMPNpz)['cs']), dGit['sOK']))
         #
-        # create and write mesh_K
-        pathTMP = os.path.join(pathFolderScratch, video, 'mesh_K.npz')
-        if not os.path.exists(pathTMP) or overwrite:
-            print('... creating mesh_K for video {:}'.format(video))
+        # create and write mesh_K; within the bathymetry boundary and within the planview/image ?BUFFER ZONE?
+        print("{}{} Creating mesh_K (wavenumber mesh) for video {}".format(' '*dGit['ind'], dGit['sB1'], video))
+        pathTMPNpz = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_K.npz')  # IMP*: nomenclature
+        if not os.path.exists(pathTMPNpz) or par['overwrite_outputs']:
             #
-            # create initial mesh_K
-            xsK, ysK = ulises.Polyline2InnerHexagonalMesh({'xs':xsBoun, 'ys':ysBoun}, par['delta_K'], options={})
-            if isPlw: # the pixels correspond to the planview
-                dataTMP = np.asarray(ulises.ReadRectangleFromTxt(pathPlwTxt, {'c1':5, 'valueType':'float'}))
-                csP, rsP, xsP, ysP, zsP = [dataTMP[:, item] for item in range(5)]; assert np.std(zsP) < 1.e-3
-                nc, nr = [int(np.round(max(item)-min(item))) for item in [csP, rsP]]
-                possC = [np.where((csP == item[0]) & (rsP == item[1]))[0][0] for item in [[min(csP), min(rsP)], [max(csP), min(rsP)], [max(csP), max(rsP)], [min(csP), max(rsP)]]]
-                possIn = ulises.CloudOfPoints2InnerPositionsForPolyline(xsK, ysK, {'xs':xsP[possC], 'ys':ysP[possC]}, options={}) # points of mesh_K in plw
-                (xsK, ysK), zsK = [item[possIn] for item in [xsK, ysK]], np.mean(zsP) * np.ones(len(possIn))
-                csK, rsK = ulises.ApplyAffineA01(ulises.FindAffineA01(xsP, ysP, csP, rsP), xsK, ysK) # real valued (only for TMPPlot)
-            else: # the pixels correspond to the oblique image
-                zt = ulises.ReadRectangleFromTxt(pathZsTxt, {'c1':1, 'valueType':'float'})[0]
-                mainSet = ulises.ReadMainSetFromCalTxt(pathCalTxt, options={})
-                csK, rsK, possGood = ulises.XYZ2CDRD(mainSet, xsK, ysK, zt*np.ones(len(xsK)), options={'returnGoodPositions':True})
-                (csK, rsK, xsK, ysK), zsK = [item[possGood] for item in [csK, rsK, xsK, ysK]], zt * np.ones(len(xsK))
+            # obtain initial mesh_K
+            xsK, ysK = uli.Polyline2InnerHexagonalMesh_2506(plBoun, par['delta_K'])
+            ztsK = zSea * np.ones(xsK.shape)
+            if isPlw:  # IMP*: pixels, floats, correspond to the planview; pixels not saved nor used except for scratch_plots
+                possC = [np.where((csPlw == item[0]) & (rsPlw == item[1]))[0][0] for item in [[min(csPlw), min(rsPlw)], [max(csPlw), min(rsPlw)], [max(csPlw), max(rsPlw)], [min(csPlw), max(rsPlw)]]]
+                possI = uli.CloudOfPoints2PossInsidePolyline_2508(xsK, ysK, {'xs': xsPlw[possC], 'ys': ysPlw[possC]})  # points of mesh_K in planview
+                xsK, ysK, ztsK = [item[possI] for item in [xsK, ysK, ztsK]]
+                csK, rsK = uli.ApplyAffineA01_2504(AXY2CRPlw, xsK, ysK)  # real valued; only for scratch_plots
+            else:  # IMP*: pixels, floats, correspond to the oblique image; pixels not saved nor used except for scratch_plots
+                csK, rsK, possG = uli.XYZ2CDRD_2410(xsK, ysK, ztsK, dMCS, rtrnPossG=True, margin=0)
+                csK, rsK, xsK, ysK, ztsK = [item[possG] for item in [csK, rsK, xsK, ysK, ztsK]]
             #
-            # write mesh_K in npz
-            ulises.MakeFolder(os.path.split(pathTMP)[0])
-            np.savez(pathTMP, xs=xsK, ys=ysK, zs=zsK)
+            # write pathTMPNpz
+            os.makedirs(os.path.dirname(pathTMPNpz), exist_ok=True)
+            np.savez(pathTMPNpz, xs=xsK, ys=ysK, zts=ztsK)  # IMP*: only xsK, ysK and ztsK ; nomenclature
             #
-            # plot mesh_K
-            if verbosePlot:
-                pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_K.png')
-                ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                plt.plot(list(xsBoun) + [xsBoun[0]], list(ysBoun) + [ysBoun[0]], 'r-', lw=5)
-                plt.plot(xsK, ysK, 'g.', markersize=0.4)
-                plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
-                plt.tight_layout()
-                plt.savefig(pathTMPPlot, dpi=100); plt.clf()
-                #
-                pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'mesh_K_inImage.png')
-                pathsImg = [os.path.join(pathFolderVideos, video, item) for item in os.listdir(os.path.join(pathFolderVideos, video)) if os.path.splitext(item)[1][1:] in extsImg]
-                if len(pathsImg) > 0:
-                    img = cv2.imread(pathsImg[0])
-                    img = ulises.DisplayCRInImage(img, csK, rsK, options={'colors':[[0, 255, 0]], 'size':1.5})
-                    ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                    cv2.imwrite(pathTMPPlot, img)
-                else:
-                    print('... no images in folder {:} to plot {:}'.format(os.path.join(pathFolderVideos, video), pathTMPPlot))
+            # write pathsJpgTMPs
+            if par['generate_scratch_plots']:
+                # mesh in xy
+                pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'mesh_K.jpg')  # IMP*: nomenclature
+                uli.GHBathyPlotMesh(pathScrJpg, xsK, ysK, dGit['fs'], dGit['fs'], dGit['fontsize'], dpi=dGit['dpiLQ'], xsBoun=xsBoun, ysBoun=ysBoun)
+                # mesh in imgFrame
+                pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'in_image_mesh_K.jpg')  # IMP*: nomenclature
+                uli.DisplayCRInImage_2504(imgFrame, csK, rsK, colors=[[0, 255, 255]], margin=0, factor=0.1, pathOut=pathScrJpg)
+            #
+            # inform
+            print("\033[F\033[K{}{} Mesh_K (wavenumber mesh) for video {} successfully created: {} points {}".format(' '*dGit['ind'], dGit['sB1'], video, len(xsK), dGit['sOK']))
         else:
-            print('... mesh_K for video {:} was already created'.format(video))
+            # inform
+            print("\033[F\033[K{}{} Mesh_K (wavenumber mesh) for video {} was already available: {} points {}".format(' '*dGit['ind'], dGit['sB1'], video, len(np.load(pathTMPNpz)['xs']), dGit['sOK']))
     #
     return None
 #
-def ObtainWAndModes(pathFolderData, pathFolderVideos, pathFolderScratch, listOfVideos, overwrite, verbosePlot): # last read 2022-10-28
+def ObtainWAndModes(pathFldMain):  # lm:2025-06-26; lr:2025-07-03
     #
-    extsImg = ['jpg', 'JPG', 'jpeg', 'JPEG', 'png', 'PNG']
+    # obtain par and videos
+    par, videos = uli.GHBathyParAndVideos(pathFldMain)
     #
-    # load parameters
-    pathTMP = os.path.join(pathFolderData, 'parameters.json')
-    with open(pathTMP, 'r') as f:
-        par = json.load(f)
-    #
-    # obtain list of videos
-    listOfVideosTMP = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
-    if len(listOfVideos) > 0:
-        listOfVideos = [item for item in listOfVideosTMP if item in listOfVideos]
-    else:
-        listOfVideos = copy.deepcopy(listOfVideosTMP)
-    #
-    # run for videos
-    for video in listOfVideos:
+    # obtain w and modes for each video
+    for video in videos:
+        #
+        # obtain inform
+        print("{}{} Computing mode decomposition for video {}".format(' '*dGit['ind'], dGit['sB1'], video))
         #
         # manage overwrite
-        if os.path.exists(os.path.join(pathFolderScratch, video, 'M_modes')) and not overwrite:
-            if len([item for item in os.listdir(os.path.join(pathFolderScratch, video, 'M_modes')) if '{:}.'.format(par['DMD_or_EOF']) in item]) > 0:
-                print('... modes {:} for video {:} were already computed (the scratch folder exists and contains {:} files)'.format(par['DMD_or_EOF'], video, par['DMD_or_EOF'])); continue
-        if overwrite:
-            pathsTMP = [os.path.join(pathFolderScratch, video, 'M_modes'), os.path.join(pathFolderScratch, 'plots', video, 'M_modes')]
-            for pathTMP in pathsTMP:
-                if os.path.exists(pathTMP):
-                    for fn in [item for item in os.listdir(pathTMP) if '{:}.'.format(par['DMD_or_EOF']) in item]:
-                        os.remove(os.path.join(pathTMP, fn))
+        pathFldM = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'M_modes')
+        if os.path.exists(pathFldM) and not par['overwrite_outputs']:
+            print("\033[F\033[K{}{} Mode decomposition for video {} was already available: {} modes found {}".format(' '*dGit['ind'], dGit['sB1'], video, len(os.listdir(pathFldM)), dGit['sOK']))
+            continue
+        if par['overwrite_outputs']:  # clean
+            for pathFldTMP in [pathFldM, os.path.join(pathFldMain, 'scratch', 'plots', video, 'M_modes')]:
+                uli.CleanAFld_2504(pathFldTMP)  # works also if pathFldTMP does not exist
         #
-        # load fnsVideo (sorted)
-        fnsVideo = sorted([item for item in os.listdir(os.path.join(pathFolderVideos, video)) if os.path.splitext(item)[1][1:] in extsImg])
+        # load pathFldFrames and fnsFrames
+        pathFldFrames = uli.GHBathyExtractVideoToPathFldFrames(pathFldMain, video, active=False)
+        fnsFrames = sorted([item for item in os.listdir(pathFldFrames) if os.path.splitext(item)[1][1:] in extsImgs])  # IMP*: sorted
         #
-        # load ts in seconds
-        if os.path.splitext(fnsVideo[0])[0].endswith('plw'): # ************plw.ext
-            ts = np.asarray([int(os.path.splitext(fn)[0][-15:-3])/1000. for fn in fnsVideo]) # IMP* ts in seconds, the fn in miliseconds
-        else: # ************.ext
-            ts = np.asarray([int(os.path.splitext(fn)[0][-12:])/1000. for fn in fnsVideo]) # IMP* ts in seconds, the fn in miliseconds
-        if len(ts) < 2: continue
-        ts, dtsMean = ts - ts[0], np.mean(np.diff(ts))
-        ts = dtsMean * np.arange(len(ts)) # IMP*
-        if par['DMD_or_EOF'] == 'EOF' and par['min_period'] < 6 * dtsMean:
-            print('*** working with EOF, "min_period" in json file must be >= 6 / fps (>= {:5.2f})'.format(6*dtsMean)); sys.exit()
+        # load ts in seconds; IMP*: frames can start at any time; IMP*: frames end 123456789012plw.ext or 123456789012.ext
+        if os.path.splitext(fnsFrames[0])[0].endswith('plw'):  # 123456789012plw.ext all
+            ts = np.asarray([int(os.path.splitext(fn)[0][-15:-3])/1000 for fn in fnsFrames])  # WATCH OUT: IMP*: ts in seconds, fn in milliseconds
+        else:  # 123456789012.ext
+            ts = np.asarray([int(os.path.splitext(fn)[0][-12:])/1000 for fn in fnsFrames])  # WATCH OUT: IMP*: ts in seconds, fn in milliseconds
+        if len(ts) < 2:  # WATCH OUT: epsilon
+            print("\033[F\033[K{}{} Video {} cannot be processed: duration too short {}".format(' '*dGit['ind'], dGit['sB1'], video, dGit['sWO']))
+            continue
+        ts, dtsMean = ts - ts[0], np.mean(np.diff(ts))  # IMP*: ts starts at 0
+        ts = dtsMean * np.arange(len(ts))  # IMP*: we assume ~uniformity
+        if par['decomposition_method'] == 'EOF' and par['min_period'] < 6 * dtsMean:
+            print("\033[F\033[K{}{} Video {} cannot be processed: for EOF decomposition, 'min_period' must be > {:.2f} {}".format(' '*dGit['ind'], dGit['sB1'], video, 6*dtsMean, dGit['sWO']))
+            continue
         #
-        # load cs and rs for mesh_M (coordinates in the image, whether planview or oblique)
-        dataTMP = np.load(os.path.join(pathFolderScratch, video, 'mesh_M.npz'))
+        # load cs and rs for mesh_M; coordinates in the image, whether planview or oblique
+        dataTMP = np.load(os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_M.npz'))
         csM, rsM, xsM, ysM = [dataTMP[item] for item in ['cs', 'rs', 'xs', 'ys']]
+        if True:  # avoidable check
+            assert np.allclose(csM, np.round(csM)) and np.allclose(rsM, np.round(rsM))
         csM, rsM = [np.round(item).astype(int) for item in [csM, rsM]]
         #
-        # load the video corresponding to mesh_M
-        wtMax, dtHilbert = np.max(par['time_windows']), par['max_period']
-        nWtMax, nHilbert = [int(item/dtsMean) for item in [wtMax, dtHilbert]] # there was a int()+1
-        assert nWtMax+2*nHilbert <= len(ts) # IMP*
+        # obtain nWtMax and nDtHilbert
+        wtMax, dtHilbert = np.max(par['time_windows']), par['max_period']  # IMP*
+        nWtMax, nDtHilbert = [int(item/dtsMean)+1 for item in [wtMax, dtHilbert]]
+        if nWtMax + 2 * nDtHilbert > len(ts):
+            if max(ts)-2*dtHilbert > 0:
+                print("\033[F\033[K{}{} Video {} cannot be processed: max('time_windows') must be comfortably < {:.2f} s {}".format(' '*dGit['ind'], dGit['sB1'], video, max(ts)-2*dtHilbert, dGit['sWO']))
+            else:
+                print("\033[F\033[K{}{} Video {} cannot be processed: 'max_period' must be comfortably < {:.2f} s {}".format(' '*dGit['ind'], dGit['sB1'], video, max(ts)/2, dGit['sWO']))
+            continue
+        #
+        # obtain nStep
+        nStep = max(1, min(int(par['time_step'] / dtsMean), nWtMax - 1))  # IMP*: nWtMax-1 since there must be overlap for the updating scheme
         #
         # run through the video
-        for posT in range(0, len(ts), max([1, int(par['time_step']/dtsMean)])):
+        for posT in range(0, len(ts), nStep):
             #
-            if not (posT>=0 and posT+nWtMax+2*nHilbert<len(ts)-1): # leave a small margin
+            # disregard and inform
+            if not 0 <= posT <= len(ts)-1-nWtMax-2*nDtHilbert-1:  # small margin
                 continue
+            print("{}{} Decomposition of subvideos starting at t = {:.1f} s".format(' '*2*dGit['ind'], dGit['sB2'], ts[posT+nDtHilbert]))  # IMP*: +nDtHilbert
             #
-            print('... {:} decomposition for subvideo starting at t = {:5.1f} for video {:}'.format(par['DMD_or_EOF'], ts[posT+nHilbert], video)) # IMP* +nHilbert
-            #
-            if posT == 0: # first case
-                XForTBallEx = np.zeros((len(csM), nWtMax+2*nHilbert))
+            # load or update XForTBallEx
+            if posT == 0:  # initialize
+                XForTBallEx = np.zeros((len(csM), nWtMax+2*nDtHilbert))  # Ex = "Hilbert Extended"
                 possTLH = []
-                for posH in range(nWtMax+2*nHilbert):
-                    posTLH = posT + posH
+                for posH in range(nWtMax+2*nDtHilbert):
+                    posTLH = posT + posH  # posH since posT = 0
                     possTLH.append(posTLH)
-                    img = cv2.imread(os.path.join(pathFolderVideos, video, fnsVideo[posTLH]))
-                    XForTBallEx[:, posH] = img[rsM, csM, 1] / 255. # load green channel
-                posTOld, possTLHOld = [copy.deepcopy(item) for item in [posT, possTLH]]
+                    img = cv2.imread(os.path.join(pathFldFrames, fnsFrames[posTLH]))
+                    XForTBallEx[:, posH] = img[rsM, csM, 1] / 255.  # load green channel
             else:
                 nTMP = posT - posTOld
-                XForTBallEx[:, 0:XForTBallEx.shape[1]-nTMP] = XForTBallEx[:, nTMP:XForTBallEx.shape[1]] # displaced nTMP
+                XForTBallEx[:, :XForTBallEx.shape[1]-nTMP] = XForTBallEx[:, nTMP:XForTBallEx.shape[1]]  # IMP*: displaced nTMP
                 possTLH = []
                 for posH in range(nTMP):
-                    posTLH = possTLHOld[-1] + 1 + posH
+                    posTLH = possTLHOld[-1] + 1 + posH  # IMP*: easy to read
                     possTLH.append(posTLH)
-                    img = cv2.imread(os.path.join(pathFolderVideos, video, fnsVideo[posTLH]))
-                    XForTBallEx[:, XForTBallEx.shape[1]-nTMP+posH] = img[rsM, csM, 1] / 255. # load green channel
-                posTOld, possTLHOld = [copy.deepcopy(item) for item in [posT, possTLH]]
+                    img = cv2.imread(os.path.join(pathFldFrames, fnsFrames[posTLH]))
+                    XForTBallEx[:, XForTBallEx.shape[1]-nTMP+posH] = img[rsM, csM, 1] / 255.  # IMP*: easy to read, load green channel
+            posTOld, possTLHOld = posT, possTLH
             #
-            # perform RPCA and Hilbert
-            if par['candes_iter'] > 0:
-                XForTBallEx = ulises.X2LSByCandes(XForTBallEx, options={'max_iter':par['candes_iter'], 'mu':1.})[0] # IMP*
+            # perform RPCA and Hilbert to XForTBallExHilbert
+            if par['candes_iterations'] > 0:
+                XForTBallEx = uli.X2LSByCandes_2506(XForTBallEx, max_iter=par['candes_iterations'])[0]
             XForTBallExHilbert = signal.hilbert(XForTBallEx)
             #
             # crop the Hilbert extensions
-            XForTBallHilbert = XForTBallExHilbert[:, nHilbert:-nHilbert]
+            XForTBallHilbert = XForTBallExHilbert[:, nDtHilbert:-nDtHilbert]  # IMP*: crop the extension
             #
             # perform DMD/EOF for all 'time_windows'
             for wt in par['time_windows']:
-                print('... {:} decomposition for t = {:5.1f} and wt = {:5.1f}'.format(par['DMD_or_EOF'], ts[posT+nHilbert], wt)) # IMP* +nHilbert
-                fnOut0 = 't{:}_wt{:}'.format(str('{:3.2f}'.format(ts[posT+nHilbert])).zfill(8), str('{:3.2f}'.format(wt)).zfill(8)) # IMP* +nHilbert
                 #
-                # obtain positions for wt
-                possWt = range(0, np.min([int(wt/dtsMean), XForTBallHilbert.shape[1]]))
+                # inform and obtain fnOut0
+                print("{}{} Decomposition of subvideo from t = {:.1f} s to t = {:.1f} s".format(' '*3*dGit['ind'], dGit['sB3'], ts[posT+nDtHilbert], ts[posT+nDtHilbert] + wt))  # IMP*: +nDtHilbert
+                fnOut0 = 't{}_wt{}'.format(str('{:.2f}'.format(ts[posT+nDtHilbert])).zfill(8), str('{:.2f}'.format(wt)).zfill(8))  # IMP*: +nDtHilbert
+                #
+                # obtain possWt and XForTBallHilbertWt
+                possWt = range(np.min([int(wt/dtsMean), XForTBallHilbert.shape[1]]))
                 XForTBallHilbertWt = XForTBallHilbert[:, possWt]
                 #
-                # perform DMD/EOF for the time window
+                # obtain modes
                 modes = {}
-                if par['DMD_or_EOF'] == 'DMD':
+                if par['decomposition_method'] == 'DMD':
                     try:
-                        Phi, Lambda = ulises.X2DMD(XForTBallHilbertWt, par['DMD_rank'])
-                    except: continue
-                    for posDMD in range(len(Lambda)):
-                        w = np.imag(np.log(Lambda[posDMD]) / dtsMean)
-                        T = 2. * np.pi / w
-                        if not (par['min_period'] <= T <= par['max_period']): continue
-                        modes[posDMD] = {'w':w, 'T':T, 'phases':np.angle(Phi[:, posDMD]), 'amplitudes':np.abs(Phi[:, posDMD])}
-                elif par['DMD_or_EOF'] == 'EOF':
+                        Ts, phases, amplitudes = uli.X2DMD_2506(XForTBallHilbertWt, par['DMD_rank'], dt=dtsMean)  # IMP*: phases and amplitudes of the spatial component
+                    except Exception:
+                        continue
+                    for posDMD in range(len(Ts)):
+                        T, w = Ts[posDMD], 2 * np.pi / Ts[posDMD]
+                        if not par['min_period'] <= T <= par['max_period']:
+                            continue
+                        modes[posDMD] = {'w': w, 'T': T, 'phases': phases[posDMD], 'amplitudes': amplitudes[posDMD]}
+                elif par['decomposition_method'] == 'EOF':
                     try:
-                        EOF = ulises.X2EOF(XForTBallHilbertWt)
-                    except: continue
-                    for posEOF in range(len(EOF['explainedVariances'])):
-                        var = np.real(EOF['explainedVariances'][posEOF])
-                        if var < par['EOF_variance']: continue
-                        w, wStd = ulises.GetWPhaseFitting(dtsMean*np.arange(len(possWt)), EOF['amplitudesForEOFs'][posEOF], 3*dtsMean, options={}) # IMP* 3*dtsMean as radius
-                        if wStd / w > 0.15: continue # IMP* 0.15 as critical value
-                        T = 2. * np.pi / w
-                        if not (par['min_period'] <= T <= par['max_period']): continue
-                        modes[posEOF] = {'var':var, 'wStdOverW':wStd/w, 'w':w, 'T':T, 'phases':np.angle(EOF['EOFs'][posEOF]), 'amplitudes':np.abs(EOF['EOFs'][posEOF])}
+                        spatialEOFs, temporalEOFs, expVariances = uli.X2EOF_2502(XForTBallHilbertWt)[6:9]  # IMP* [6:9]
+                    except Exception:
+                        continue
+                    for posEOF in range(len(expVariances)):
+                        var = np.real(expVariances[posEOF])
+                        if var < par['EOF_variance']:
+                            continue
+                        w, wStd = uli.GetWPhaseFitting_2506(dtsMean*np.arange(len(possWt)), temporalEOFs[posEOF], 3*dtsMean, verbose_plot=False)  # IMP*: 3*dtsMean as radius
+                        if wStd / w > 0.15: # WATCH OUT: epsilon
+                            continue
+                        T = 2 * np.pi / w
+                        if not par['min_period'] <= T <= par['max_period']:
+                            continue
+                        modes[posEOF] = {'var': var, 'wStdOverW': wStd/w, 'w': w, 'T': T, 'phases': np.angle(spatialEOFs[posEOF]), 'amplitudes': np.abs(spatialEOFs[posEOF])}
                 else:
-                    print('*** "DMD_or_EOF" in json file must be "DMD" or "EOF"'); sys.exit()
+                    print("! Invalid 'decomposition_method' in parameters.json: must be 'DMD' or 'EOF'")
+                    sys.exit()
                 #
-                # write and plot the results
+                # inform
+                print("\033[F\033[K{}{} Subvideo from t = {:.1f} s to t = {:.1f} s processed: {} modes saved {}".format(' '*3*dGit['ind'], dGit['sB3'], ts[posT+nDtHilbert], ts[posT+nDtHilbert] + wt, len(modes), dGit['sOK']))  # IMP*: +nDtHilbert
+                #
+                # write modes
                 for key in modes.keys():
-                    #
-                    # write the results in npz
-                    fnOut = '{:}_T{:}_{:}.npz'.format(fnOut0, str('{:3.2f}'.format(modes[key]['T'])).zfill(8), par['DMD_or_EOF'])
-                    pathTMP = os.path.join(pathFolderScratch, video, 'M_modes', fnOut)
-                    ulises.MakeFolder(os.path.split(pathTMP)[0])
-                    if par['DMD_or_EOF'] == 'DMD':
-                        np.savez(pathTMP, w=modes[key]['w'], T=modes[key]['T'], phases=modes[key]['phases'], amplitudes=modes[key]['amplitudes'])
-                    elif par['DMD_or_EOF'] == 'EOF':
-                        np.savez(pathTMP, w=modes[key]['w'], T=modes[key]['T'], phases=modes[key]['phases'], amplitudes=modes[key]['amplitudes'], var=modes[key]['var'], wStdOverW=modes[key]['wStdOverW'])
-                    #
-                    # plot the results
-                    if verbosePlot:
-                        pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'M_modes', '{:}.png'.format(os.path.splitext(fnOut)[0]))
-                        ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                        #
-                        #fig = plt.figure(figsize=[6, 4]) # width x height
-                        plt.suptitle('T = {:3.2f} s'.format(modes[key]['T']))
-                        #
-                        plt.subplot(1, 2, 1)
-                        plt.title('phase [rad]')
-                        plt.plot(np.min(xsM), np.min(ysM), 'w.'); plt.plot(np.max(xsM), np.max(ysM), 'w.')
-                        sct = plt.scatter(xsM, ysM, marker='o', c=modes[key]['phases'], edgecolor='none', s=5, cmap='jet')
-                        plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.axis('off')
-                        #
-                        plt.subplot(1, 2, 2)
-                        plt.title('amplitude [-]')
-                        plt.plot(np.min(xsM), np.min(ysM), 'w.'); plt.plot(np.max(xsM), np.max(ysM), 'w.')
-                        sct = plt.scatter(xsM, ysM, marker='o', c=modes[key]['amplitudes'], edgecolor='none', s=5, cmap='jet')
-                        plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.axis('off')
-                        #
-                        plt.tight_layout()
-                        plt.savefig(pathTMPPlot, dpi=100)
-                        plt.clf()
+                    # obtain fnOutWE
+                    fnOutWE = '{}_T{}'.format(fnOut0, str('{:.2f}'.format(modes[key]['T'])).zfill(8))
+                    # write pathTMPNpz
+                    pathTMPNpz = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'M_modes', '{}.npz'.format(fnOutWE))  # IMP*: nomenclature
+                    os.makedirs(os.path.dirname(pathTMPNpz), exist_ok=True)
+                    if par['decomposition_method'] == 'DMD':
+                        np.savez(pathTMPNpz, w=modes[key]['w'], T=modes[key]['T'], phases=modes[key]['phases'], amplitudes=modes[key]['amplitudes'])  # IMP*: nomenclature
+                    elif par['decomposition_method'] == 'EOF':
+                        np.savez(pathTMPNpz, w=modes[key]['w'], T=modes[key]['T'], phases=modes[key]['phases'], amplitudes=modes[key]['amplitudes'], var=modes[key]['var'], wStdOverW=modes[key]['wStdOverW'])  # IMP*: nomenclature
+                    # write pathScrJpg
+                    if par['generate_scratch_plots']:
+                        pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'M_modes', '{}.jpg'.format(fnOutWE))  # IMP*: nomenclature
+                        uli.GHBathyPlotModes(pathScrJpg, xsM, ysM, modes[key]['phases'], modes[key]['amplitudes'], modes[key]['T'], dGit['fs'], dGit['fs'], dGit['fontsize'], dpi=dGit['dpiLQ'])
     #
     return None
 #
-def ObtainK(pathFolderData, pathFolderScratch, listOfVideos, overwrite, verbosePlot): # last read 2022-10-28
+def ObtainK(pathFldMain): # lm:2022-06-26; lr:2022-07-03
     #
-    # load parameters
-    pathTMP = os.path.join(pathFolderData, 'parameters.json')
-    with open(pathTMP, 'r') as f:
-        par = json.load(f)
+    # obtain par and videos
+    par, videos = uli.GHBathyParAndVideos(pathFldMain)
     #
-    # obtain list of videos
-    listOfVideosTMP = sorted([item for item in os.listdir(pathFolderData) if os.path.isdir(os.path.join(pathFolderData, item)) and item != 'groundTruth'])
-    if len(listOfVideos) > 0:
-        listOfVideos = [item for item in listOfVideosTMP if item in listOfVideos]
-    else:
-        listOfVideos = copy.deepcopy(listOfVideosTMP)
-    #
-    # run for videos
-    for video in random.sample(listOfVideos, len(listOfVideos)): # randomized
+    # obtain wavenumbers for each video
+    for video in videos:
+        #
+        # inform
+        print("{}{} Computing wavenumber fields for video {}".format(' '*dGit['ind'], dGit['sB1'], video))
+        #
+        # obtain pathFldM and disregard
+        pathFldM = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'M_modes')
+        if not os.path.exists(pathFldM) or len(os.listdir(pathFldM)) == 0:
+            print("\033[F\033[K{}{} No modes available for video {} {}".format(' '*dGit['ind'], dGit['sB1'], video, dGit['sWO']))
+            continue
         #
         # load mesh_M
-        dataTMP = np.load(os.path.join(pathFolderScratch, video, 'mesh_M.npz'))
-        csM, rsM, xsM, ysM, zsM = [dataTMP[item] for item in ['cs', 'rs', 'xs', 'ys', 'zs']]; assert np.std(zsM) < 1.e-3
+        dataTMP = np.load(os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_M.npz'))
+        csM, rsM, xsM, ysM, ztsM = [dataTMP[item] for item in ['cs', 'rs', 'xs', 'ys', 'zts']]
+        assert np.std(ztsM) < 1.e-3  # WATCH OUT: epsilon
+        assert np.allclose(csM, np.round(csM)) and np.allclose(rsM, np.round(rsM))
         csM, rsM = [np.round(item).astype(int) for item in [csM, rsM]]
         #
         # load mesh_K
-        dataTMP = np.load(os.path.join(pathFolderScratch, video, 'mesh_K.npz'))
-        xsK, ysK, zsK = [dataTMP[item] for item in ['xs', 'ys', 'zs']]; assert np.std(zsK) < 1.e-3
+        dataTMP = np.load(os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_K.npz'))
+        xsK, ysK, ztsK = [dataTMP[item] for item in ['xs', 'ys', 'zts']]
+        assert np.std(ztsK) < 1.e-3  # WATCH OUT: epsilon
         #
         # manage overwrite
-        if os.path.exists(os.path.join(pathFolderScratch, video, 'K_wavenumbers')):
-            fnsTMP0 = set([item[0:-4] for item in os.listdir(os.path.join(pathFolderScratch, video, 'M_modes')) if item.endswith('{:}.npz'.format(par['DMD_or_EOF']))])
-            fnsTMP1 = set([item[0:-6] for item in os.listdir(os.path.join(pathFolderScratch, video, 'K_wavenumbers')) if item.endswith('{:}_K.npz'.format(par['DMD_or_EOF']))])
-            if fnsTMP0 == fnsTMP1 and not overwrite:
-                print('... wavenumbers for video {:} were already computed'.format(video)); continue
-        if overwrite:
-            pathsTMP = [os.path.join(pathFolderScratch, video, 'K_wavenumbers'), os.path.join(pathFolderScratch, 'plots', video, 'K_wavenumbers')]
-            for pathTMP in pathsTMP:
-                if os.path.exists(pathTMP):
-                    for fn in [item for item in os.listdir(pathTMP) if '{:}_K.'.format(par['DMD_or_EOF']) in item]:
-                        os.remove(os.path.join(pathTMP, fn))
+        pathFldK = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'K_wavenumbers')
+        if os.path.exists(pathFldK) and len(os.listdir(pathFldK)) == len(os.listdir(pathFldM)) and not par['overwrite_outputs']:
+            print("\033[F\033[K{}{} Wavenumber fields for video {} were already available: {} fields found {}".format(' '*dGit['ind'], dGit['sB1'], video, len(os.listdir(pathFldK)), dGit['sOK']))
+            continue
+        if par['overwrite_outputs']:  # clean
+            for pathFldTMP in [pathFldK, os.path.join(pathFldMain, 'scratch', 'plots', video, 'K_wavenumbers')]:
+                uli.CleanAFld_2504(pathFldTMP)  # works also if pathFldTMP does not exist
         #
         # obtain ks for each subvideo mode
-        if not os.path.exists(os.path.join(pathFolderScratch, video, 'M_modes')):
-            print('... there are no modes to obtain wavenumbers from for video {:}'.format(video)); continue
-        fns = sorted([item for item in os.listdir(os.path.join(pathFolderScratch, video, 'M_modes')) if item.endswith('{:}.npz'.format(par['DMD_or_EOF']))])
-        for fn in random.sample(fns, len(fns)): # randomized
+        for fnNpzM in sorted(os.listdir(pathFldM)):
             #
-            # obtain pathOut (here, to manage overwrite)
-            fnOut = '{:}_K.npz'.format(os.path.splitext(fn)[0])
-            pathOut = os.path.join(pathFolderScratch, video, 'K_wavenumbers', fnOut)
-            if os.path.exists(pathOut) and not overwrite:
-                print('... wavenumbers for {:} of video {:} were already computed'.format(fn, video)); continue
-            print('... computing wavenumbers for {:} of video {:}'.format(fn, video))
+            # obtain fnNpzMWE and inform
+            fnNpzMWE = os.path.splitext(fnNpzM)[0]
+            print("{}{} Computing wavenumber field for mode {}".format(' '*2*dGit['ind'], dGit['sB2'], fnNpzMWE))
+            #
+            # obtain pathOut; here, to manage overwrite
+            pathOutNpz = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'K_wavenumbers', fnNpzM)  # IMP*: nomenclature; no trace of decomposition method
+            if os.path.exists(pathOutNpz) and not par['overwrite_outputs']:
+                print("\033[F\033[K{}{} Wavenumber field for mode {} was already available {}".format(' '*2*dGit['ind'], dGit['sB2'], fnNpzMWE, dGit['sOK']))
+                continue
             #
             # read the mode file
-            dataTMP = np.load(os.path.join(pathFolderScratch, video, 'M_modes', fn))
-            w, T, phasesM = [dataTMP[item] for item in ['w', 'T', 'phases']] # given in mesh_M
+            dataTMP = np.load(os.path.join(pathFldMain, 'scratch', 'numerics', video, 'M_modes', fnNpzM))
+            w, T, phasesM = [dataTMP[item] for item in ['w', 'T', 'phases']]  # given in mesh_M
             #
             # obtain RKs
-            hsAux = [par['min_depth']+(item+1)/par['nRadius_K']*(par['max_depth']-par['min_depth']) for item in range(par['nRadius_K'])] # from small to larger
-            RKs = np.asarray([par['cRadius_K']*ulises.TH2LOneStep(T, hAux, grav) for hAux in reversed(hsAux)]) # from large to smaller
+            hsAux = [par['min_depth']+(item+1)/par['n_neighborhoods_K']*(par['max_depth']-par['min_depth']) for item in range(par['n_neighborhoods_K'])][::-1]  # from large to small
+            RKs = np.asarray([par['coeff_radius_K'] * uli.TH2LOneStep(T, hAux, grav) for hAux in hsAux])  # from large to small
             #
             # obtain wavenumbers kxs and kys for mesh_K
-            kxs, kys = [np.empty((len(xsK), len(RKs))) for item in range(2)]; kxs[:], kys[:] = np.NaN, np.NaN # initialized as NaNs
+            kxs, kys = [np.full((len(xsK), len(RKs)), np.nan) for _ in range(2)]  # IMP*: np.nan
             for posK in range(len(xsK)):
                 #
                 # obtain distances of the points in mesh_M to posK
-                dsToM = np.sqrt((xsM - xsK[posK]) ** 2 + (ysM - ysK[posK]) ** 2)
-                pos0InM = np.argmin(dsToM) # point in mesh_M closest to posK
+                dsToM = np.hypot(xsM - xsK[posK], ysM - ysK[posK])
+                pos0M = np.argmin(dsToM)  # point in mesh_M closest to posK
+                x0M, y0M, phase0M = xsM[pos0M], ysM[pos0M], phasesM[pos0M]
                 #
                 # analysis for RKs
-                xsMTMP, ysMTMP, phasesMTMP, dsToMTMP = [copy.deepcopy(item) for item in [xsM, ysM, phasesM, dsToM]] # initialize auxiliar
-                for posRK, RK in enumerate(RKs):
+                xsMTMP, ysMTMP, phasesMTMP, dsToMTMP = map(copy.deepcopy, [xsM, ysM, phasesM, dsToM])  # initialize auxiliar
+                for posRK, RK in enumerate(RKs):  # IMP*, decreasing
+                    # update xsMTMP, ysMTMP, phasesMTMP and dsToMTMP (RK decreases) and disregard
                     poss = np.where(dsToMTMP <= RK)[0]
-                    xsMTMP, ysMTMP, phasesMTMP, dsToMTMP = [item[poss] for item in [xsMTMP, ysMTMP, phasesMTMP, dsToMTMP]] # update auxiliar
-                    if len(poss) < 6 or np.sqrt((np.mean(xsMTMP) - xsK[posK]) ** 2 + (np.mean(ysMTMP) - ysK[posK]) ** 2) > RK / 4: continue # IMP*
-                    #
-                    # obtain points of the surface to fit
-                    xsDel, ysDel, phasesDel = xsMTMP - xsM[pos0InM], ysMTMP - ysM[pos0InM], np.angle(np.exp(1j * (phasesMTMP - phasesM[pos0InM])))
-                    AsDel = np.transpose(np.asarray([xsDel, ysDel, np.ones(len(xsDel))]))
-                    #
-                    # obtain the wavenumber through RANSAC
-                    if par['nRANSAC_K'] > 0:
-                        possGood = []
-                        for posRANSAC in range(par['nRANSAC_K']):
-                            poss3 = random.sample(range(len(phasesDel)), 3)
-                            try: # solving xsDel * sol[0] + ysDel * sol[1] + sol[2] = phasesDel
-                                sol = np.linalg.solve(AsDel[poss3, :], phasesDel[poss3])
-                            except: continue
-                            possGoodH = np.where(np.abs(np.dot(AsDel, sol) - phasesDel) < 0.25)[0] # IMP* error 0.25 = 15 sexagesimal degrees
-                            if len(possGoodH) > len(possGood):
-                                possGood = copy.deepcopy(possGoodH)
-                    else:
-                        possGood = list(range(len(xsDel)))
-                    if len(possGood) < 6: continue # IMP*
-                    sol = np.linalg.solve(np.dot(AsDel[possGood, :].transpose(), AsDel[possGood, :]), np.dot(AsDel[possGood, :].transpose(), phasesDel[possGood])) # kx, ky = sol[0], sol[1]
-                    kxs[posK, posRK], kys[posK, posRK] = sol[0], sol[1]
+                    xsMTMP, ysMTMP, phasesMTMP, dsToMTMP = [item[poss] for item in [xsMTMP, ysMTMP, phasesMTMP, dsToMTMP]]
+                    if len(poss) < 6 or np.hypot(np.mean(xsMTMP) - xsK[posK], np.mean(ysMTMP) - ysK[posK]) > RK / 4:  # IMP*: OJO: do something similar in bathymetry?; be more demanding?
+                        continue
+                    # obtain xsDel, ysDel and phasesDel; centered
+                    xsDel, ysDel, phasesDel = xsMTMP - x0M, ysMTMP - y0M, np.angle(np.exp(1j * (phasesMTMP - phase0M)))  # IMP*
+                    # update kxs and kys
+                    kx, ky, _, possG = uli.RANSACPlane(xsDel, ysDel, phasesDel, 0.25, pDesired=1-1.e-9, margin=0.2, max_nForRANSAC=100)  # WATCH OUT: epsilon
+                    if len(possG) < 6:
+                        continue
+                    kxs[posK, posRK], kys[posK, posRK] = kx, ky
             #
-            # obtain ks and gammas setting NaNs to kxs, kys, ks and gammas where gamma > 1.2: setting 1.0 or 2.0 instead of 1.2 is not so important
-            ks = np.sqrt(kxs ** 2 + kys ** 2)
+            # inform
+            print("\033[F\033[K{}{} Wavenumber field for mode {} computed {}".format(' '*2*dGit['ind'], dGit['sB2'], fnNpzMWE, dGit['sOK']))
+            #
+            # update kxs, kys and obtain ks and gammas; nans where gamma > 1.2; setting 1.0 or 2.0 instead of 1.2 is not so important
+            ks = np.hypot(kxs, kys)
             for posRK in range(len(RKs)):
-                possTMP = np.where((ks[:, posRK] < 1.e-6) | (1.2 * ks[:, posRK] < w ** 2 / grav))[0] # bad positions, ks < is useful
-                kxs[possTMP, posRK], kys[possTMP, posRK], ks[possTMP, posRK] = np.NaN, np.NaN, np.NaN # IMP*
-            gammas = w ** 2 / (grav * ks)
+                possB = np.where((ks[:, posRK] < 1.e-6) | (1.2 * ks[:, posRK] < w ** 2 / grav))[0]  # bad positions, ks < is useful
+                kxs[possB, posRK], kys[possB, posRK], ks[possB, posRK] = np.nan, np.nan, np.nan # IMP*
+            gammas = w ** 2 / (grav * ks)  # = tanh(ks * h)
             #
-            # obtain meanGs and stdGs setting NaNs where ks is NaN (and in more positions), IMP*
-            meanGs, stdGs = [np.empty((len(xsK), len(RKs))) for item in range(2)]; meanGs[:], stdGs[:] = np.NaN, np.NaN # initialized as NaNs
+            # obtain meanGs and stdGs; IMP*: nans where ks is nan and in more positions
+            meanGs, stdGs = [np.full((len(xsK), len(RKs)), np.nan) for _ in range(2)]  # IMP*: np.nan
             for posK in range(len(xsK)):
-                dsToKTMP = np.sqrt((xsK - xsK[posK]) ** 2 + (ysK - ysK[posK]) ** 2)
+                dsToKTMP = np.hypot(xsK - xsK[posK], ysK - ysK[posK])
                 for posRK, RK in enumerate(RKs):
-                    if np.isnan(ks[posK, posRK]): continue # IMP* meanGs and stdGs are NaNs
-                    RG = max([0.5 * 2. * np.pi / ks[posK, posRK], 2.1 * par['delta_K']]) # IMP*
-                    possTMP = np.where((np.invert(np.isnan(ks[:, posRK]))) & (dsToKTMP <= RG))[0] # IMP* not-NaN points in the neighborhood
-                    if len(possTMP) < 3: continue # IMP*
-                    meanGs[posK, posRK], stdGs[posK, posRK] = np.mean(gammas[possTMP, posRK]), np.std(gammas[possTMP, posRK]) # these mean and std are actually nanmean and nanstd
+                    if np.isnan(ks[posK, posRK]):
+                        continue  # initialized as np.nan
+                    RG = max(0.5 * 2 * np.pi / ks[posK, posRK], 2.1 * par['delta_K'])  # IMP*
+                    possG = np.where((~np.isnan(ks[:, posRK])) & (dsToKTMP <= RG))[0]  # good positions
+                    if len(possG) < 3:
+                        continue  # initialized as np.nan
+                    meanGs[posK, posRK], stdGs[posK, posRK] = np.mean(gammas[possG, posRK]), np.std(gammas[possG, posRK])
             #
-            # write the results in npz
-            ulises.MakeFolder(os.path.split(pathOut)[0])
-            np.savez(pathOut, w=w, T=T, RKs=RKs, ks=ks, meanGs=meanGs, stdGs=stdGs)
+            # write pathOutNpz
+            os.makedirs(os.path.dirname(pathOutNpz), exist_ok=True)
+            np.savez(pathOutNpz, w=w, T=T, RKs=RKs, ks=ks, meanGs=meanGs, stdGs=stdGs)  # IMP*: WATCH OUT: meanGs and stdGs may have more np.nan than ks
             #
-            # plot the results
-            if verbosePlot:
-                pathTMPPlot = os.path.join(pathFolderScratch, 'plots', video, 'K_wavenumbers', '{:}.png'.format(os.path.splitext(fnOut)[0]))
-                #
-                #fig = plt.figure(figsize=[9, 9]) # width x height
-                plt.suptitle('T = {:3.2f} s'.format(T))
-                for posRK in range(len(RKs)):
-                    plt.subplot(len(RKs), 3, 3*posRK+1)
-                    plt.title('phase [rad]')
-                    sct = plt.scatter(xsM, ysM, marker='o', c=phasesM, vmin=-np.pi, vmax=np.pi, edgecolor='none', s=5, cmap='jet')
-                    possTMP = np.where((xsK - np.mean(xsK)) ** 2 + (ysK - np.mean(ysK)) ** 2 <= RKs[posRK] ** 2)[0]
-                    plt.plot(xsK[possTMP], ysK[possTMP], 'w.')
-                    plt.colorbar(sct); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)]); plt.axis('off')
-                    #
-                    plt.subplot(len(RKs), 3, 3*posRK+2)
-                    plt.title(r'$z_b$ [m]')
-                    plt.plot(np.min(xsK), np.min(ysK), 'w.'); plt.plot(np.max(xsK), np.max(ysK), 'w.')
-                    zbs = np.mean(zsK) - np.arctanh(np.clip(gammas[:, posRK], 0, 1-1.e-6)) / ks[:, posRK] # gammas and ks have NaN
-                    sct = plt.scatter(xsK, ysK, marker='o', c=zbs, vmin=-par['max_depth'], vmax=0, edgecolor='none', s=5, cmap='gist_earth')
-                    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)]); plt.axis('off')
-                    #
-                    plt.subplot(len(RKs), 3, 3*posRK+3)
-                    plt.title(r'$\sigma_\gamma$ [-]')
-                    plt.plot(np.min(xsK), np.min(ysK), 'w.'); plt.plot(np.max(xsK), np.max(ysK), 'w.')
-                    sct = plt.scatter(xsK, ysK, marker='o', c=stdGs[:, posRK], vmin=0, vmax=0.2, edgecolor='none', s=5, cmap='CMRmap_r')
-                    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)]); plt.axis('off')
-                    #
-                plt.tight_layout()
-                ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-                plt.savefig(pathTMPPlot, dpi=100)
-                plt.clf()
+            # write pathScrJpg
+            if par['generate_scratch_plots']:
+                pathScrJpg = os.path.join(pathFldMain, 'scratch', 'plots', video, 'K_wavenumbers', '{}.jpg'.format(fnNpzMWE))  # IMP*: nomenclature
+                uli.GHBathyPlotWavenumbers(pathScrJpg, xsM, ysM, T, phasesM, xsK, ysK, RKs, ztsK, ks, gammas, stdGs, par['max_depth'], dGit['fs'], dGit['fs'], dGit['fontsize'], dpi=dGit['dpiLQ'])
     #
     return None
 #
-def ObtainB(pathFolderData, pathFolderScratch, pathFolderBathymetries, overwrite, verbosePlot): # last read 2022-10-28
+def ObtainB(pathFldMain):  # lm:2025-07-07; lr:2025-07-07
     #
-    def GoalFunction220622(x, theArgs): # IMP*
+    def GoalFunction220622(x, theArgs):
         gammas, ws, zts, g = [theArgs[key] for key in ['gammas', 'ws', 'zts', 'g']]
-        gammasR = ws ** 2 / (g * ulises.WGH2KOneStep(ws, g, zts-x[0]))
-        gf = np.sqrt(np.mean((gammasR - gammas) ** 2))
+        gammasR = ws ** 2 / (g * uli.WGH2KOneStep(ws, g, np.clip(zts-x[0], 1.e-14, np.inf)))  # WATCH OUT: epsilon
+        gf = uli.RMSE1D_2506(gammasR, gammas)
         return gf
-    def interp_weights220622(xy, uv, d=2):
-        tri = sc.spatial.Delaunay(xy)
-        simplex = tri.find_simplex(uv)
-        vertices = np.take(tri.simplices, simplex, axis=0)
-        temp = np.take(tri.transform, simplex, axis=0)
-        bary = np.einsum('njk,nk->nj', temp[:, :d, :], uv - temp[:, d])
-        return vertices, np.hstack((bary, 1 - bary.sum(axis=1, keepdims=True)))
-    def interpolate220622(values, vtx, wts):
-        return np.einsum('nj,nj->n', np.take(values, vtx), wts)
     #
-    # load parameters
-    pathTMP = os.path.join(pathFolderData, 'parameters.json')
-    with open(pathTMP, 'r') as f:
-        par = json.load(f)
+    # obtain par
+    par = uli.GHBathyParAndVideos(pathFldMain)[0]  # IMP*: also checks videos
     #
-    # load videos4dates
-    pathTMP = os.path.join(pathFolderData, 'videos4dates.json')
-    with open(pathTMP, 'r') as f:
-        videos4dates = json.load(f)
-    dates = sorted(videos4dates.keys())
+    # load xsB and ysB
+    pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'mesh_B.txt')  # IMP*: nomenclature
+    dataTMP = np.loadtxt(pathTMPTxt, usecols=range(2), dtype=float, ndmin=2)
+    xsB, ysB = [dataTMP[:, item] for item in [0, 1]]
     #
-    # load mesh_B
-    pathTMP = os.path.join(pathFolderScratch, 'mesh_B.npz')
-    dataTMP = np.load(pathTMP)
-    xsB, ysB = [dataTMP[item] for item in ['xs', 'ys']]
-    #
-    # write mesh_B in txt
-    pathTMP = os.path.join(pathFolderBathymetries, 'mesh_B.txt')
-    ulises.MakeFolder(os.path.split(pathTMP)[0])
-    fileTMP = open(pathTMP, 'w')
-    for posB in range(len(xsB)):
-        fileTMP.write('{:15.3f} {:15.3f}\n'.format(xsB[posB], ysB[posB]))
-    fileTMP.close()
-    #
-    # plot mesh_B
-    if verbosePlot:
-        pathTMPPlot = os.path.join(pathFolderBathymetries, 'plots', 'mesh_B.png')
-        ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-        plt.plot(xsB, ysB, 'g.', markersize=0.4)
-        plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
-        plt.tight_layout()
-        plt.savefig(pathTMPPlot, dpi=100); plt.clf()
-    #
-    for date in dates:
+    # run for dates
+    for date12 in sorted(par['videos4dates']):
         #
-        # obtain pathOut (here, to manage overwrite)
-        pathOut = os.path.join(pathFolderScratch, 'B_bathymetries', '{:}_{:}_B.npz'.format(date, par['DMD_or_EOF'])) # IMP* (in scratch we keep DMD or EOF)
-        if os.path.exists(pathOut) and not overwrite: # we avoid 'continue' to ensure that we produce the cheap results in the folder 'bathymetries'
-            print('... bathymetry for date {:} was already computed'.format(date)) 
-            #
-            # load zbsB and ezbsB
-            dataTMP = np.load(pathOut)
-            zbsB, ezbsB = [dataTMP[item] for item in ['zbsB', 'ezbsB']]
-        else:
-            print('... computing bathymetry for date {:}'.format(date), end='', flush=True)
-            #
-            # run through videos for the date to load (w, k)
-            xsKW, ysKW, gammasKW, meanGsKW, wsKW, ztsKW = [np.asarray([]) for item in range(6)] # will not contain NaNs (IMP*)
-            for video in videos4dates[date]:
-                #
-                # load mesh_K
-                dataTMP = np.load(os.path.join(pathFolderScratch, video, 'mesh_K.npz'))
-                xsK, ysK, zsK = [dataTMP[item] for item in ['xs', 'ys', 'zs']]; assert np.std(zsK) < 1.e-3
-                #
-                # load wavenumbers at mesh_K
-                if not os.path.exists(os.path.join(pathFolderScratch, video, 'K_wavenumbers')): continue
-                fns = sorted([item for item in os.listdir(os.path.join(pathFolderScratch, video, 'K_wavenumbers')) if item.endswith(par['DMD_or_EOF']+'_K.npz')])
-                for fn in fns:
-                    dataTMP = np.load(os.path.join(pathFolderScratch, video, 'K_wavenumbers', fn))
-                    w, T, ks, meanGs, stdGs, RKs = [dataTMP[item] for item in ['w', 'T', 'ks', 'meanGs', 'stdGs', 'RKs']] # ks, meanGs and stdGs are len(xsK) x len(RKs)
-                    for posRK in range(len(RKs)):
-                        #
-                        # obtain control variables
-                        gs0 = stdGs[:, posRK] # can contain NaNs
-                        gs1 = np.abs(w ** 2 / (grav * ks[:, posRK]) - meanGs[:, posRK]) # can contain NaNs
-                        #
-                        # obtain and add valid positions
-                        poss = np.where((np.invert(np.isnan(gs0))) & (np.invert(np.isnan(gs1))) & (gs0 <= par['stdGammaC']) & (gs1 <= par['stdGammaC']))[0] # IMP*
-                        xsKW, ysKW = np.append(xsKW, xsK[poss]), np.append(ysKW, ysK[poss])
-                        gammasKW, meanGsKW = np.append(gammasKW, w ** 2 / (grav * ks[poss, posRK])), np.append(meanGsKW, meanGs[poss, posRK])
-                        wsKW, ztsKW = np.append(wsKW, w*np.ones(len(poss))), np.append(ztsKW, np.mean(zsK)*np.ones(len(poss)))
-            #
-            # obtain zbsB and ezbsB
-            zbsB, ezbsB = [np.empty(len(xsB)) for item in range(2)]; zbsB[:], ezbsB[:] = np.NaN, np.NaN # initialized as NaNs
-            if len(xsKW) == 0:
-                print(' fail') # will write NaNs
-            else:
-                RBs = np.empty(len(xsB)); RBs[:] = np.NaN
-                for posB in range(len(xsB)):
-                    #
-                    # obtain gammas, ws and zts around
-                    dsToKWTMP = np.sqrt((xsKW - xsB[posB]) ** 2 + (ysKW - ysB[posB]) ** 2)
-                    poss0 = np.where(dsToKWTMP <= 1.1 * np.min(dsToKWTMP) + 1.e-3)[0] # one point in space, but several realizations
-                    RB = max([par['cRadius_B'] * np.mean(2. * np.pi * grav * meanGsKW[poss0] / wsKW[poss0] ** 2), 2.1 * par['delta_K']])
-                    possInKW = np.where(dsToKWTMP <= RB)[0]
-                    if len(possInKW) < 10: continue # IMP*
-                    gammasTMP, wsTMP, ztsTMP = [item[possInKW] for item in [gammasKW, wsKW, ztsKW]]
-                    #
-                    # obtain zb through RANSAC
-                    possGood, zb = [], np.NaN
-                    for zbH in np.arange(np.min(ztsTMP)-par['max_depth'], np.max(ztsTMP)-par['min_depth'], 0.05): # IMP*
-                        gammasH = wsTMP ** 2 / (grav * ulises.WGH2KOneStep(wsTMP, grav, np.clip(ztsTMP - zbH, par['min_depth'], 1.e+3))) # IMP*
-                        gammasH[np.where(ztsTMP - zbH <= par['min_depth'])[0]] = np.inf # IMP*
-                        possGoodH = np.where(np.abs(gammasH - gammasTMP) < par['stdGammaC'])[0]
-                        if len(possGoodH) > len(possGood):
-                            possGood, zb = [copy.deepcopy(item) for item in [possGoodH, zbH]]
-                    if len(possGood) < 10: continue # IMP*
-                    #
-                    # obtain zb through the minimization for RANSAC good positions
-                    theArgs = {'gammas':gammasTMP[possGood], 'ws':wsTMP[possGood], 'zts':ztsTMP[possGood], 'g':grav}
-                    zb = optimize.minimize(GoalFunction220622, np.asarray([zb]), args=(theArgs)).x[0] # IMP*
-                    zbsB[posB], RBs[posB] = zb, RB
-                #
-                # obtain ezbsB and ensure zbsB is NaN if ezbsB is NaN
-                for posB in range(len(xsB)):
-                    if np.isnan(zbsB[posB]): continue # IMP* ezbsB is NaN
-                    dsToBTMP = np.sqrt((xsB - xsB[posB]) ** 2 + (ysB - ysB[posB]) ** 2)
-                    possTMP = np.where(dsToBTMP <= RBs[posB])[0]
-                    if len(possTMP) < 3: continue # IMP* ezbsB is NaN
-                    ezbsB[posB] = np.std(zbsB[possTMP]) # IMP* std (this is more demanding than using nanstd)
-                zbsB[np.where(np.isnan(ezbsB))[0]] = np.NaN # IMP* (two lines above)
-                print(' success')
-            #
-            # write the results in npz
-            ulises.MakeFolder(os.path.split(pathOut)[0])
-            np.savez(pathOut, zbsB=zbsB, ezbsB=ezbsB)
+        # obtain pathOutTxt and disregard
+        pathOutTxt = os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries', '{}.txt'.format(date12))  # IMP*: nomenclature        
+        if os.path.exists(pathOutTxt) and not par['overwrite_outputs']:
+            zbsB = np.loadtxt(pathOutTxt, usecols=range(2), dtype=float, ndmin=2)[:, 0]
+            print("{}{} Bathymetry for date {} was already available: {} points {}".format(' '*dGit['ind'], dGit['sB1'], date12, np.sum(~np.isnan(zbsB)), dGit['sOK']))
+            continue
         #
-        # write the results in txt
-        pathTMP = os.path.join(pathFolderBathymetries, '{:}_B.txt'.format(date))
-        ulises.MakeFolder(os.path.split(pathTMP)[0])
-        fileTMP = open(pathTMP, 'w')
+        # inform
+        print("{}{} Computing bathymetry for date {}".format(' '*dGit['ind'], dGit['sB1'], date12))
+        #
+        # run through videos for the date to load sets of x, y, gamma, mean_gamma, w and zt
+        xsKW, ysKW, gammasKW, meanGsKW, wsKW, ztsKW = [[] for _ in range(6)]  # IMP*: not to contain nan
+        for video in par['videos4dates'][date12]:
+            # load xsK, ysK and ztsK
+            dataTMP = np.load(os.path.join(pathFldMain, 'scratch', 'numerics', video, 'mesh_K.npz'))
+            xsK, ysK, ztsK = [dataTMP[item] for item in ['xs', 'ys', 'zts']]
+            assert np.std(ztsK) < 1.e-3
+            # obtain pathFldK and fnsNpzs
+            pathFldK = os.path.join(pathFldMain, 'scratch', 'numerics', video, 'K_wavenumbers')
+            if not os.path.exists(pathFldK) or len(os.listdir(pathFldK)) == 0:
+                continue
+            fnsNpzs = sorted(os.listdir(pathFldK))
+            # run through fnsNpzs; modes
+            for fnNpz in fnsNpzs:
+                # load w, ks, meanGs, stdGs, RKs; ks, meanGs and stdGs are len(xsK) x len(RKs)
+                dataTMP = np.load(os.path.join(pathFldK, fnNpz))
+                w, ks, meanGs, stdGs, RKs = [dataTMP[item] for item in ['w', 'ks', 'meanGs', 'stdGs', 'RKs']]
+                # run through RKs
+                for posRK in range(len(RKs)):
+                    # obtain possG
+                    gs0 = stdGs[:, posRK]  # can contain nans
+                    gs1 = np.abs(w ** 2 / (grav * ks[:, posRK]) - meanGs[:, posRK])  # can contain nans
+                    possG = np.where(~np.isnan(gs0) & ~np.isnan(gs1) & (gs0 <= par['gamma_std_cutoff']) & (gs1 <= par['gamma_std_cutoff']))[0]  # does not contain nan
+                    # update xsKW, ysKW, gammasKW, meanGsKW, wsKW and ztsKW
+                    xsKW.extend(xsK[possG]); ysKW.extend(ysK[possG]); gammasKW.extend(w**2/(grav*ks[possG, posRK])); meanGsKW.extend(meanGs[possG, posRK]); wsKW.extend([w]*len(possG)); ztsKW.extend([np.mean(ztsK)]*len(possG))
+        xsKW, ysKW, gammasKW, meanGsKW, wsKW, ztsKW = map(np.asarray, [xsKW, ysKW, gammasKW, meanGsKW, wsKW, ztsKW])
+        #
+        # inform and disregard
+        if len(xsKW) == 0:
+            print("\033[F\033[K{}{} No bathymetry was obtained for date {} {}".format(' '*dGit['ind'], dGit['sB1'], date12, dGit['sWO']))
+            continue
+        #
+        # obtain zbsB and auxiliar RBs
+        zbsB, RBs = [np.full(len(xsB), np.nan) for _ in range(2)]  # IMP*: np.nan
         for posB in range(len(xsB)):
-            fileTMP.write('{:9.4f} {:9.4f}\n'.format(zbsB[posB], ezbsB[posB]))
-        fileTMP.close()
+            # obtain dsToKWTMP
+            dsToKWTMP = np.hypot(xsKW - xsB[posB], ysKW - ysB[posB])
+            # obtain L0; a characteristic wavelength
+            poss0 = np.where(dsToKWTMP <= 1.1 * np.min(dsToKWTMP) + 1.e-3)[0]
+            L0 = np.mean(2 * np.pi * grav * meanGsKW[poss0] / wsKW[poss0] ** 2)
+            # obtain RB; a characteristic radius for search
+            RB = max([par['coeff_radius_B'] * L0, 2.1 * par['delta_K']])  # IMP*
+            # obtain possInKW, to compute the bathymetry, and disregard
+            possInKW = np.where(dsToKWTMP <= RB)[0]
+            if len(possInKW) < 10:  # WATCH OUT: epsilon
+                continue  # initialized as np.nan
+            # obtain gammasA, wsA and ztsA; A = Around
+            gammasA, wsA, ztsA = [item[possInKW] for item in [gammasKW, wsKW, ztsKW]]
+            # obtain possG and zb and disregard; first approximation through a RANSAC-like approach
+            possG, zb = [], np.nan
+            for zbH in np.arange(np.min(ztsA)-par['max_depth'], np.max(ztsA)-par['min_depth'], 0.05): # IMP*: 0.05
+                gammasH = wsA ** 2 / (grav * uli.WGH2KOneStep(wsA, grav, np.clip(ztsA - zbH, par['min_depth'], np.inf)))  # IMP*: np.clip
+                gammasH[ztsA - zbH <= par['min_depth']] = np.inf  # IMP*
+                possGH = np.where(np.abs(gammasH - gammasA) < par['gamma_std_cutoff'])[0]  # IMP*: gamma_std_cutoff
+                if len(possGH) > len(possG):
+                    possG, zb = possGH, zbH
+            if len(possG) < 10:  # WATCH OUT: epsilon
+                continue  # initialized as np.nan
+            # obtain zb through the minimization for the good positions
+            theArgs = {'gammas': gammasA[possG], 'ws': wsA[possG], 'zts': ztsA[possG], 'g': grav}
+            zb = optimize.minimize(GoalFunction220622, np.asarray([zb]), args=(theArgs)).x[0]  # IMP*
+            # update zbsB and RBs
+            zbsB[posB], RBs[posB] = zb, RB
         #
-        # interpolate the groundTruth bathymetry
-        pathGTB = os.path.join(pathFolderData, 'groundTruth', '{:}_GT_xyz.txt'.format(date))
-        if os.path.exists(pathGTB):
-            #
-            # write and/or load the interpolated groundTruth bathymetry in npz
-            pathTMP = os.path.join(pathFolderScratch, 'B_bathymetries',  '{:}_GT_B.npz'.format(date))
-            if os.path.exists(pathTMP):
-                dataTMP = np.load(pathTMP)
-                zbsGTInB = dataTMP['zbsGTInB']
-            else:
-                dataTMP = np.asarray(ulises.ReadRectangleFromTxt(pathGTB, {'c1':3, 'valueType':'float'}))
-                xsGT, ysGT, zsGT = [dataTMP[:, item] for item in range(3)]
-                xsysGT, xsysB = np.transpose(np.asarray([xsGT, ysGT])), np.transpose(np.asarray([xsB, ysB]))
-                vtx, wts = interp_weights220622(xsysGT, xsysB)
-                zbsGTInB = interpolate220622(zsGT, vtx, wts)
-                np.savez(pathTMP, zbsGTInB=zbsGTInB)
-            #
-            # write the interpolated groundTruth bathymetry in txt
-            pathTMP = os.path.join(pathFolderBathymetries, '{:}_GT_B.txt'.format(date))
-            fileTMP = open(pathTMP, 'w')
+        # obtain ezbsB
+        ezbsB = np.full(len(xsB), np.nan)  # IMP*
+        for posB in range(len(xsB)):
+            if np.isnan(zbsB[posB]) or np.isnan(RBs[posB]):
+                continue  # initialized as np.nan
+            dsToBTMP = np.hypot(xsB - xsB[posB], ysB - ysB[posB])
+            possTMP = np.where(dsToBTMP <= RBs[posB])[0]
+            if len(possTMP) < 3:
+                continue  # initialized as np.nan
+            ezbsB[posB] = np.std(zbsB[possTMP])  # IMP*: WATCH OUT: not np.nanstd; if any zbsB is nan, ezbsB is nan
+        #
+        # update zbsB and inform
+        zbsB[np.isnan(ezbsB)] = np.nan  # IMP*
+        print("\033[F\033[K{}{} Bathymetry for date {} computed: {} points {}".format(' '*dGit['ind'], dGit['sB1'], date12, np.sum(~np.isnan(zbsB)), dGit['sOK']))
+        #
+        # write zbsB and ezbsB in txt
+        os.makedirs(os.path.dirname(pathOutTxt), exist_ok=True)
+        with open(pathOutTxt, 'w') as fileout:
             for posB in range(len(xsB)):
-                fileTMP.write('{:9.4f}\n'.format(zbsGTInB[posB]))
-            fileTMP.close()
-        else:
-            zbsGTInB = np.NaN
+                fileout.write('{:9.4f} {:9.4f}\n'.format(zbsB[posB], ezbsB[posB]))  # IMP*: formatting
         #
-        # plot the results
-        if verbosePlot:
-            #
-            pathTMPPlot0 = os.path.join(pathFolderScratch, 'plots', 'B_bathymetries', '{:}_{:}_B.png'.format(date, par['DMD_or_EOF'])) # IMP* (in scratch we keep DMD or EOF)
-            ulises.MakeFolder(os.path.split(pathTMPPlot0)[0])
-            pathTMPPlot1 = os.path.join(pathFolderBathymetries, 'plots', '{:}_B.png'.format(date))
-            ulises.MakeFolder(os.path.split(pathTMPPlot1)[0])
-            #
-            plt.suptitle('date = {:}'.format(date))
-            #
-            plt.subplot(1, 3, 1)
-            plt.title(r'$z_b$ [m]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            sct = plt.scatter(xsB, ysB, marker='o', c=zbsB, edgecolor='none', vmin=-par['max_depth'], vmax=-par['min_depth'], s=5, cmap='gist_earth')
-            plt.colorbar(sct); plt.axis('equal'); plt.axis('off')
-            #
-            plt.subplot(1, 3, 2)
-            plt.title('self error [m]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            sct = plt.scatter(xsB, ysB, marker='o', c=ezbsB, vmin=0, vmax=1, edgecolor='none', s=5, cmap='jet')
-            plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.axis('off')
-            #
-            plt.subplot(1, 3, 3)
-            plt.title('relative error [-]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            sct = plt.scatter(xsB, ysB, marker='o', c=(zbsB-zbsGTInB)/np.abs(zbsGTInB), vmin=-1, vmax=1, edgecolor='none', s=5, cmap='seismic_r')
-            plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.axis('off')
-            #
-            plt.tight_layout()
-            plt.savefig(pathTMPPlot0, dpi=100)
-            plt.savefig(pathTMPPlot1, dpi=100)
-            plt.clf()
-    #
+        # obtain thereIsGTB
+        pathGTBTxt = os.path.join(pathFldMain, 'data', 'ground_truth', '{}_GT_xyz.txt'.format(date12))  # IMP*: nomenclature
+        thereIsGTB = os.path.exists(pathGTBTxt)
+        #
+        # obtain zbsGTB; ground truth bathymetry interpolated to mesh_B
+        if thereIsGTB:
+            # obtain zbsGTB
+            dataTMP = np.loadtxt(pathGTBTxt, usecols=range(3), dtype=float, ndmin=2)
+            xsGT, ysGT, zbsGT = [dataTMP[:, item] for item in range(3)]  # IMP*: nomenclature
+            zbsGTB = griddata((xsGT, ysGT), zbsGT, (xsB, ysB), method='linear')  # IMP*: np.nan outside the convex hull
+            # write zbsGTB in txt
+            pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries', '{}_GT.txt'.format(date12))  # IMP*: nomenclature
+            os.makedirs(os.path.dirname(pathTMPTxt), exist_ok=True)
+            with open(pathTMPTxt, 'w') as fileout:
+                for posB in range(len(xsB)):
+                    fileout.write('{:9.4f}\n'.format(zbsGTB[posB]))  # IMP*: formatting
+        else:
+            zbsGTB = None
+        #
+        # write pathTMPPngpathImg
+        pathTMPPng = os.path.join(pathFldMain, 'output', 'plots', 'bathymetries', '{}.png'.format(date12))  # IMP*: nomenclature
+        uli.GHBathyPlotBath(pathTMPPng, date12, xsB, ysB, zbsB, ezbsB, par['min_depth'], par['max_depth'], dGit['fw'], dGit['fh'], dGit['fontsize'], dpi=dGit['dpiLQ'], thereIsGT=thereIsGTB, zbsGT=zbsGTB)
+    # 
     return None
 #
-def PerformKalman(pathFolderData, pathFolderBathymetries, verbosePlot): # last read 2022-10-28
+def PerformKalman(pathFldMain): # lm:2025-07-08; lr:2025-07-09
     #
-    # load parameters
-    pathTMP = os.path.join(pathFolderData, 'parameters.json')
-    with open(pathTMP, 'r') as f:
-        par = json.load(f)
+    # obtain par
+    par = uli.GHBathyParAndVideos(pathFldMain)[0]  # IMP*: also checks videos; par = uli.GHLoadPar(pathFldMain)
     #
-    # read bathymetry mesh
-    pathTMP = os.path.join(pathFolderBathymetries, 'mesh_B.txt')
-    dataTMP = np.loadtxt(pathTMP)
+    # load xsB and ysB
+    pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'mesh_B.txt')  # IMP*: nomenclature
+    dataTMP = np.loadtxt(pathTMPTxt, usecols=range(2), dtype=float, ndmin=2)
     xsB, ysB = [dataTMP[:, item] for item in range(2)]
     #
-    # read bathymetry filenames
-    fns = sorted([fn for fn in os.listdir(pathFolderBathymetries) if fn.endswith('B.txt') and len(fn) == 18 and int(par['Kalman_ini']) <= int(fn[0:12]) <= int(par['Kalman_fin'])])
+    # obtain pathFldOBat and fnsTxts
+    pathFldOBat = os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries')
+    if not os.path.exists(pathFldOBat) or len(os.listdir(pathFldOBat)) == 0:
+        print("{}{} No bathymetries available to filter {}".format(' '*dGit['ind'], dGit['sB1'], dGit['sWO']))
+        return None
+    fnsTxts = sorted([item for item in os.listdir(pathFldOBat) if len(item) == 16 and item.endswith('.txt') and int(par['Kalman_start']) <= int(item[:12]) <= int(par['Kalman_end'])])
     #
-    # perform Kalman filter
-    Ptts, zbs, ts = [np.empty(len(xsB)) for item in range(3)]; Ptts[:], zbs[:], ts[:] = np.NaN, np.NaN, np.NaN # initialized as NaNs
-    for fn in fns:
-        print('... aggregating {:}'.format(fn))
-        datenumH = ulises.Date2Datenum(fn[0:12]+'0000000')
+    # disregard
+    if all(os.path.exists(os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries_Kalman', item)) for item in fnsTxts):
+        print("{}{} All bathymetries were already filtered: {} Kalman bathymetries found {}".format(' '*dGit['ind'], dGit['sB1'], len(fnsTxts), dGit['sOK']))
+        return None
+    #
+    # obtain Kalman-filtered bathymetries
+    PttsB, zbsB, tsB = [np.full(len(xsB), np.nan) for _ in range(3)]
+    for fnTxt in fnsTxts:
         #
-        # load bathymetry for fn
-        dataTMP = np.loadtxt(os.path.join(pathFolderBathymetries, fn))
+        # obtain fnTxtWE, date12 and datenumH and inform
+        fnTxtWE, date12 = os.path.splitext(fnTxt)[0], os.path.splitext(fnTxt)[0]
+        datenumH = uli.Date2Datenum_2504(date12+'0'*5)
+        print("{}{} Computing Kalman filtered bathymetry for date {}".format(' '*dGit['ind'], dGit['sB1'], fnTxtWE))
+        #
+        # load bathymetry for fnTxt
+        dataTMP = np.loadtxt(os.path.join(pathFldOBat, fnTxt))
         zbsBH, ezbsBH = [dataTMP[:, item] for item in range(2)]
         #
         # update Kalman bathymetry
         for posB in range(len(xsB)):
-            if np.isnan(zbs[posB]):
-                Ptts[posB] = 0.
-                zbs[posB] = zbsBH[posB]
+            if np.isnan(zbsB[posB]):
+                PttsB[posB] = 0.
+                zbsB[posB] = zbsBH[posB]
             else:
-                if np.isnan(zbsBH[posB]) or np.isnan(ezbsBH[posB]): continue
-                Ptt1 = Ptts[posB] + (par['var_per_day'] * (datenumH - ts[posB])) ** 2 # p dimension [L^2]
-                Kt = Ptt1 / (Ptt1 + ezbsBH[posB] ** 2) # dimension [-]
-                Ptts[posB] = (1. - Kt) * Ptt1 # dimension [L^2]
-                zbs[posB] = zbs[posB] + Kt * (zbsBH[posB] - zbs[posB])
-            ts[posB] = datenumH # does not apply if the above 'continue' rules
+                if np.isnan(zbsBH[posB]) or np.isnan(ezbsBH[posB]): 
+                    continue
+                Ptt1 = PttsB[posB] + (par['variance_per_day'] * (datenumH - tsB[posB])) ** 2  # p dimension [L^2]
+                Kt = Ptt1 / (Ptt1 + ezbsBH[posB] ** 2)  # dimension [-]
+                PttsB[posB] = (1 - Kt) * Ptt1  # dimension [L^2]
+                zbsB[posB] = zbsB[posB] + Kt * (zbsBH[posB] - zbsB[posB])
+            tsB[posB] = datenumH   # works if at least one point is updated
         #
-        # write the results in txt
-        pathTMP = os.path.join(pathFolderBathymetries, fn.replace('B.txt', 'B_Kalman.txt'))
-        ulises.MakeFolder(os.path.split(pathTMP)[0])
-        fileTMP = open(pathTMP, 'w')
-        for posB in range(len(xsB)):
-            fileTMP.write('{:9.4f} {:9.4f}\n'.format(zbs[posB], Ptts[posB]))
-        fileTMP.close()
+        # write zbsB and np.sqrt(PttsB) in txt
+        pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries_Kalman', '{}.txt'.format(fnTxtWE))  # IMP*: nomenclature
+        os.makedirs(os.path.dirname(pathTMPTxt), exist_ok=True)
+        with open(pathTMPTxt, 'w') as fileout:
+            for posB in range(len(xsB)):
+                fileout.write('{:9.4f} {:9.4f}\n'.format(zbsB[posB], np.sqrt(PttsB[posB])))  # IMP*: formatting
         #
-        # plot the results
-        if verbosePlot:
-            pathTMP = os.path.join(pathFolderBathymetries, fn.replace('B.txt', 'GT_B.txt'))
-            if os.path.exists(pathTMP):
-                zbsGTInB = np.loadtxt(pathTMP)
-            else:
-                zbsGTInB = np.empty(len(zbs)); zbsGTInB[:] = np.NaN
-            #
-            pathTMPPlot = os.path.join(pathFolderBathymetries, 'plots', fn.replace('B.txt', 'B_Kalman.png'))
-            ulises.MakeFolder(os.path.split(pathTMPPlot)[0])
-            #
-            plt.suptitle('date = {:}'.format(fn[0:12]))
-            #
-            plt.subplot(1, 3, 1)
-            plt.title(r'$z_b$ [m]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            sct = plt.scatter(xsB, ysB, marker='o', c=zbs, edgecolor='none', vmin=-par['max_depth'], vmax=-par['min_depth'], s=5, cmap='gist_earth')
-            plt.colorbar(sct); plt.axis('equal'); plt.axis('off')
-            #
-            plt.subplot(1, 3, 2)
-            plt.title(r'$\sqrt{P}$ [m]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            auxs = np.sqrt(Ptts)
-            auxs[np.where(np.isnan(zbs))[0]] = np.NaN
-            sct = plt.scatter(xsB, ysB, marker='o', c=auxs, vmin=0, vmax=0.5, edgecolor='none', s=5, cmap='jet')
-            plt.colorbar(sct); plt.axis('equal'); plt.axis('off')
-            #
-            plt.subplot(1, 3, 3)
-            plt.title('relative error [-]')
-            plt.plot(np.min(xsB), np.min(ysB), 'w.'); plt.plot(np.max(xsB), np.max(ysB), 'w.')
-            sct = plt.scatter(xsB, ysB, marker='o', c=(zbs-zbsGTInB)/np.abs(zbsGTInB), vmin=-1, vmax=1, edgecolor='none', s=5, cmap='seismic_r')
-            plt.colorbar(sct); plt.axis('equal'); plt.axis('off')
-            #
-            plt.tight_layout()
-            plt.savefig(pathTMPPlot, dpi=100)
-            plt.clf()
+        # obtain thereIsGTB
+        pathGTBTxt = os.path.join(pathFldMain, 'data', 'ground_truth', '{}_GT_xyz.txt'.format(fnTxtWE))  # IMP*: nomenclature
+        thereIsGTB = os.path.exists(pathGTBTxt)
+        #
+        # obtain and write zbsGTB; ground truth bathymetry interpolated to mesh_B
+        if thereIsGTB:
+            # obtain zbsGTB
+            dataTMP = np.loadtxt(pathGTBTxt, usecols=range(3), dtype=float, ndmin=2)
+            xsGT, ysGT, zbsGT = [dataTMP[:, item] for item in range(3)]  # IMP*: nomenclature
+            zbsGTB = griddata((xsGT, ysGT), zbsGT, (xsB, ysB), method='linear')  # IMP*: np.nan outside the convex hull; WATCH OUT: linear
+            # write zbsGTB in txt
+            pathTMPTxt = os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries_Kalman', '{}_GT.txt'.format(fnTxtWE))  # IMP*: nomenclature
+            os.makedirs(os.path.dirname(pathTMPTxt), exist_ok=True)
+            with open(pathTMPTxt, 'w') as fileout:
+                for posB in range(len(xsB)):
+                    fileout.write('{:9.4f}\n'.format(zbsGTB[posB]))  # IMP*: formatting
+        else:
+            zbsGTB = None
+        #
+        # write pathTMPPng
+        pathTMPPng = os.path.join(pathFldMain, 'output', 'plots', 'bathymetries_Kalman', '{}.png'.format(fnTxtWE))  # IMP*: nomenclature
+        uli.GHBathyPlotBath(pathTMPPng, date12, xsB, ysB, zbsB, np.sqrt(PttsB), par['min_depth'], par['max_depth'], dGit['fw'], dGit['fh'], dGit['fontsize'], dpi=dGit['dpiLQ'], thereIsGT=thereIsGTB, zbsGT=zbsGTB, title2=r'$\sigma$-estimated [m]')
+        #
+        # inform
+        nOfPoints = np.sum(~np.isnan(np.loadtxt(os.path.join(pathFldMain, 'output', 'numerics', 'bathymetries_Kalman', '{}.txt'.format(fnTxtWE)), usecols=range(2), dtype=float, ndmin=2)[:, 0]))
+        print("\033[F\033[K{}{} Kalman filtered bathymetry for date {} computed: {} points {}".format(' '*dGit['ind'], dGit['sB1'], fnTxtWE, nOfPoints, dGit['sOK']))
+        #
     #
     return None
+#
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#

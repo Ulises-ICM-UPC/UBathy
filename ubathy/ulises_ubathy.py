@@ -1,403 +1,981 @@
 #
-# Fri Nov 11 15:06:55 2022, extract from Ulises by Gonzalo Simarro and Daniel Calvete
+# Tue Jul 15 15:56:31 2025, extract from Ulises by Gonzalo Simarro and Daniel Calvete
 #
-import copy
 import cv2
 import datetime
 import itertools
+import json
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+from pathlib import Path
+import random
+import shutil
+import string
+import subprocess
 #
-def AllVariables2MainSet(allVariables, nc, nr, options={}): # 202109141500 (last read 2022-07-06)
-    ''' comments:
-    .- input allVariables is a 14-float-ndarray (xc, yc, zc, ph, sg, ta, k1a, k2a, p1a, p2a, sca, sra, oc, or)
-    .- input nc and nr are integers or floats
-    .- output mainSet is a dictionary
-    '''
-    keys, defaultValues = ['orderOfHorizonPoly', 'radiusOfEarth'], [5, 6.371e+6]
-    options = CompleteADictionary(options, keys, defaultValues)
-    allVariablesKeys = ['xc', 'yc', 'zc', 'ph', 'sg', 'ta', 'k1a', 'k2a', 'p1a', 'p2a', 'sca', 'sra', 'oc', 'or'] # IMP* order matters
-    mainSet = {'nc':nc, 'nr':nr, 'orderOfHorizonPoly':options['orderOfHorizonPoly'], 'radiusOfEarth':options['radiusOfEarth']}
-    allVariablesDict = Array2Dictionary(allVariablesKeys, allVariables)
-    allVariablesDict['sca'] = ClipWithSign(allVariablesDict['sca'], 1.e-8, 1.e+8)
-    allVariablesDict['sra'] = ClipWithSign(allVariablesDict['sra'], 1.e-8, 1.e+8)
-    allVariables = Dictionary2Array(allVariablesKeys, allVariablesDict)
-    mainSet['allVariablesDict'] = allVariablesDict
-    mainSet.update(allVariablesDict) # IMP* (absorb in mainSet all the keys which are in allVariablesDict)
-    mainSet['allVariables'] = allVariables
-    mainSet['pc'] = np.asarray([mainSet['xc'], mainSet['yc'], mainSet['zc']])
-    R = EulerianAngles2R(mainSet['ph'], mainSet['sg'], mainSet['ta'])
-    eu, ev, ef = R2UnitVectors(R)
-    mainSet['R'] = R
-    mainSet['eu'], (mainSet['eux'], mainSet['euy'], mainSet['euz']) = eu, eu
-    mainSet['ev'], (mainSet['evx'], mainSet['evy'], mainSet['evz']) = ev, ev
-    mainSet['ef'], (mainSet['efx'], mainSet['efy'], mainSet['efz']) = ef, ef
-    Pa = MainSet2Pa(mainSet)
-    mainSet['Pa'], mainSet['Pa11'] = Pa, Pa2Pa11(Pa)
-    horizonLine = MainSet2HorizonLine(mainSet)
-    mainSet['horizonLine'] = horizonLine
-    mainSet.update(horizonLine) # IMP* (absorb in mainSet all the keys which are in horizonLine)
-    return mainSet
-def ApplyAffineA01(A01, xs0, ys0): # 202111241134 (last read 2022-11-10)
-    ''' comments:
-    .- input A01 is a 6-float-ndarray (allows to transform from 0 to 1)
-    .- input xs0 and ys0 are float-ndarrays of the same length
-    .- output xs1 and ys1 are float-ndarrays of the same length of xs0 and ys0
-    '''
+def AllVar2DHor_2410(allVar, nc, nr, zr, rangeC):  # lm:2025-03-21; lr:2025-07-02
+    if rangeC == 'close':
+        dHor = {'nc': nc, 'nr': nr, 'zr': zr, 'range': rangeC}
+        rEarth, oHorizon = REarth_2410(), OHorizon_2410()
+        dHor = dHor | {'rEarth': rEarth, 'oHorizon': oHorizon}
+        allVarKeys = AllVarKeys(rangeC)
+        dAllVar = Array2Dictionary(allVarKeys, allVar)
+        ef = UnitVectors_2502(dAllVar)[-1]  # dAngVar < dAllVar
+        Pa11 = ArrayPx_2410(dAllVar, dAllVar, rangeC)  # {dExtVar, dCaSVar} < dAllVar
+        zr = min(zr, dAllVar['zc'] - 0.1 / rEarth)
+        a0, b0 = dAllVar['zc'] - 2 * zr, np.sqrt(2 * (dAllVar['zc'] - zr) * rEarth)
+        den = max(np.hypot(ef[0], ef[1]), 1.e-14)  # WATCH OUT: epsilon
+        xA = dAllVar['xc'] + b0 * ef[0] / den
+        yA = dAllVar['yc'] + b0 * ef[1] / den
+        zA = -a0
+        dHor = dHor | {'xA': xA, 'yA': yA, 'zA': zA}
+        ac, bc = Pa11[0] * xA + Pa11[1] * yA + Pa11[2] * zA + Pa11[3], -Pa11[0] * ef[1] + Pa11[1] * ef[0]
+        ar, br = Pa11[4] * xA + Pa11[5] * yA + Pa11[6] * zA + Pa11[7], -Pa11[4] * ef[1] + Pa11[5] * ef[0]
+        ad, bd = Pa11[8] * xA + Pa11[9] * yA + Pa11[10] * zA + 1, -Pa11[8] * ef[1] + Pa11[9] * ef[0]
+        ccUh1, crUh1, ccUh0 = br * ad - bd * ar, bd * ac - bc * ad, bc * ar - br * ac
+        den = max(np.hypot(ccUh1, crUh1), 1.e-14)  # WATCH OUT: epsilon
+        ccUh1, crUh1, ccUh0 = [item / den for item in [ccUh1, crUh1, ccUh0]]
+        crUh1 = ClipWithSign(crUh1, 1.e-14, np.inf)  # WATCH OUT: epsilon
+        dHor = dHor | {'ccUh1': ccUh1, 'crUh1': crUh1, 'ccUh0': ccUh0}
+        cUhs = np.linspace(-0.1 * nc, +1.1 * nc, 31)
+        rUhs = CUh2RUh_2410(cUhs, dHor)
+        cDhs, rDhs, possG = CURU2CDRD_2410(cUhs, rUhs, dAllVar, dAllVar, rangeC, rtrnPossG=True)  # no nc nor nr for possG; just well recovered
+        if len(possG) < len(cUhs):  # WATCH OUT
+            dHor['ccDh'] = np.zeros(oHorizon + 1)
+            dHor['ccDh'][0] = -99  # WATCH OUT: epsilon; constant
+        else:
+            A = np.ones((len(possG), oHorizon + 1))  # IMP*: initialize with ones
+            for n in range(1, oHorizon + 1):  # IMP*: increasing
+                A[:, n] = cDhs[possG] ** n
+            b = rDhs[possG]
+            try:
+                AT = np.transpose(A)
+                dHor['ccDh'] = np.linalg.solve(np.dot(AT, A), np.dot(AT, b))
+                assert np.max(np.abs(b - np.dot(A, dHor['ccDh']))) < 5.e-1  # WATCH OUT: assert meant for try
+            except Exception:
+                dHor['ccDh'] = np.zeros(oHorizon + 1)
+                dHor['ccDh'][0] = -99  # WATCH OUT: epsilon; constant
+    elif rangeC == 'long':
+        dHor = {}  # WATCH OUT: missing
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return dHor
+def AllVar2DMCS_2410(allVar, nc, nr, rangeC, incHor=True, zr=0.):  # lm:2025-02-17; lr:2025-07-02
+    dMCS = {'rangeC': rangeC, 'nc': nc, 'nr': nr}
+    allVarKeys = AllVarKeys(rangeC)
+    dAllVar = Array2Dictionary(allVarKeys, allVar)
+    dMCS = dMCS | {'allVar': allVar, 'allVarKeys': allVarKeys, 'dAllVar': dAllVar}
+    dMCS = dMCS | dAllVar  # IMP*: keys
+    if rangeC == 'close':
+        px = np.asarray([dAllVar['xc'], dAllVar['yc'], dAllVar['zc']])
+        dMCS = dMCS | {'px': px, 'pc': px}
+    elif rangeC == 'long':
+        px = np.asarray([dAllVar['x0'], dAllVar['y0'], dAllVar['z0']])
+        dMCS = dMCS | {'px': px, 'p0': px}
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    R = MatrixR_2502(dAllVar)  # dAngVar < dAllVar
+    dMCS = dMCS | {'R': R}
+    eu, ev, ef = UnitVectors_2502(dAllVar)  # dAngVar < dAllVar
+    dMCS = dMCS | {'eu': eu, 'eux': eu[0], 'euy': eu[1], 'euz': eu[2]}
+    dMCS = dMCS | {'ev': ev, 'evx': ev[0], 'evy': ev[1], 'evz': ev[2]}
+    dMCS = dMCS | {'ef': ef, 'efx': ef[0], 'efy': ef[1], 'efz': ef[2]}
+    Px = ArrayPx_2410(dAllVar, dAllVar, rangeC)  # dExtVar, dCaSVar < dAllVar
+    if rangeC == 'close':
+        dMCS = dMCS | {'Px': Px, 'Pa11': Px}
+    elif rangeC == 'long':
+        dMCS = dMCS | {'Px': Px, 'Po8': Px}
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    if incHor:
+        dHor = AllVar2DHor_2410(allVar, nc, nr, zr, rangeC)
+        dMCS = dMCS | {'dHor': dHor}
+        dMCS = dMCS | dHor  # IMP*: keys
+    return dMCS
+def AllVarKeys(rangeC):  # 2010-01-01; lr:2025-04-28; lr:2025-07-11
+    if rangeC == 'close':
+        allVarKeys = ['xc', 'yc', 'zc', 'ph', 'sg', 'ta', 'k1a', 'k2a', 'p1a', 'p2a', 'sca', 'sra', 'oc', 'or']  # WATCH OUT: cannot be changed
+        if True:  # avoidable check for readability
+            assert len(allVarKeys) == 14
+    elif rangeC == 'long':
+        allVarKeys = ['x0', 'y0', 'z0', 'ph', 'sg', 'ta', 'sc', 'sr']  # WATCH OUT: cannot be changed
+        if True:  # avoidable check for readability
+            assert len(allVarKeys) == 8
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return allVarKeys
+def ApplyAffineA01_2504(A01, xs0, ys0):  # 1900-01-01; lm:2025-05-06; lm:2025-06-27
     xs1 = A01[0] * xs0 + A01[1] * ys0 + A01[2]
     ys1 = A01[3] * xs0 + A01[4] * ys0 + A01[5]
     return xs1, ys1
-def AreImgMarginsOK(nc, nr, imgMargins): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input nc and nr are integers
-    .- input imgMargins is a dictionary
-    .- output areImgMarginsOK is a boolean
-    '''
-    imgMargins = CompleteImgMargins(imgMargins)
-    condC = min([imgMargins['c0'], imgMargins['c1'], nc-1-(imgMargins['c0']+imgMargins['c1'])]) >= 0
-    condR = min([imgMargins['r0'], imgMargins['r1'], nr-1-(imgMargins['r0']+imgMargins['r1'])]) >= 0
-    areImgMarginsOK = condC and condR
-    return areImgMarginsOK
-def Array2Dictionary(keys, theArray): # 202206291320 (last read 2022-06-29)
-    ''' comments:
-    .- input keys is a string-list
-    .- input theArray is a list or ndarray of the same length of keys
-    .- output theDictionary is a dictionary
-    '''
-    theDictionary = {keys[posKey]:theArray[posKey] for posKey in range(len(keys))}
-    return theDictionary
-def CDRD2CURU(mainSet, cDs, rDs): # 202109101200 (last read 2022-07-06) potentially expensive
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'k1a', 'k2a', 'p1a', 'p2a', 'sca', 'sra', 'oc' and 'or')
-    .- input cDs and rDs are float-ndarrays of the same length
-    .- output cUs and rUs are float-ndarrays of the same length of cDs and rDs or Nones (if it does not succeed)
-    '''
-    uDas, vDas = CR2UaVa(mainSet, cDs, rDs)
-    uUas, vUas = UDaVDa2UUaVUa(mainSet, uDas, vDas) # potentially expensive
-    if uUas is None or vUas is None:
-        cUs, rUs = None, None
+def Array2Dictionary(keys, theArray):  # 1900-01-01; lm:2025-05-01; lr:2025-07-11
+    if not (len(set(keys)) == len(keys) == len(theArray)):
+        raise Exception("Invalid input: 'keys' and 'theArray' must have the same length")
+    if isinstance(theArray, (list, np.ndarray)):
+        theDictionary = dict(zip(keys, theArray))
     else:
-        cUs, rUs = UaVa2CR(mainSet, uUas, vUas)
-    return cUs, rUs
-def CDRDZ2XY(mainSet, cDs, rDs, zs, options={}): # 202109231442 (last read 2022-07-12) potentially expensive
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'nc' and 'nr')
-    .- input cDs, rDs and zs are float-ndarrays of the same length (zs can be just a float)
-    .- output xs and ys are float-ndarrays of the same length or Nones (if it does not succeed)
-    .- output possGood is a integer-list or None (if it does not succeed or not options['returnGoodPositions'])
-    '''
-    keys, defaultValues = ['returnGoodPositions', 'imgMargins'], [False, {'c0':0, 'c1':0, 'r0':0, 'r1':0, 'isComplete':True}]
-    options = CompleteADictionary(options, keys, defaultValues)
-    cUs, rUs = CDRD2CURU(mainSet, cDs, rDs) # potentially expensive
-    if cUs is None or rUs is None:
-        return None, None, None
-    uUas, vUas = CR2UaVa(mainSet, cUs, rUs)
-    if isinstance(zs, np.ndarray): # float-ndarray
-        planes = {'pxs':np.zeros(zs.shape), 'pys':np.zeros(zs.shape), 'pzs':np.ones(zs.shape), 'pts':-zs}
-    else: # float
-        planes = {'pxs':0., 'pys':0., 'pzs':1., 'pts':-zs}
-    xs, ys, zsR, possGood = UUaVUa2XYZ(mainSet, planes, uUas, vUas, options={'returnPositionsRightSideOfCamera':options['returnGoodPositions']})
-    if isinstance(zs, np.ndarray): # float-ndarray
-        assert np.allclose(zsR, zs)
-    else: # float
-        assert np.allclose(zsR, zs*np.ones(len(xs)))
-    if options['returnGoodPositions']:
-        if len(possGood) > 0:
-            nc, nr, cDsGood, rDsGood = mainSet['nc'], mainSet['nr'], cDs[possGood], rDs[possGood]
-            possGoodInGood = CR2PositionsWithinImage(nc, nr, cDsGood, rDsGood, options={'imgMargins':options['imgMargins']})
-            possGood = [possGood[item] for item in possGoodInGood]
-    else: # possGood is None from UUaVUa2XYZ above
-        assert possGood is None
-    return xs, ys, possGood
-def CR2CRInteger(cs, rs): # 202109131000 (last read 2022-07-06)
-    ''' comments:
-    .- input cs and rs are integer- or float-ndarrays
-    .- output cs and rs are integer-ndarrays
-    '''
-    cs = np.round(cs).astype(int)
-    rs = np.round(rs).astype(int)
-    return cs, rs
-def CR2CRIntegerWithinImage(nc, nr, cs, rs, options={}): # 202109141700 (last read 2022-07-12)
-    ''' comments:
-    .- input nc and nr are integers or floats
-    .- input cs and rs are float-ndarrays
-    .- output csIW and rsIW are integer-ndarrays
-    '''
-    keys, defaultValues = ['imgMargins'], [{'c0':0, 'c1':0, 'r0':0, 'r1':0, 'isComplete':True}]
-    options = CompleteADictionary(options, keys, defaultValues)
-    possWithin = CR2PositionsWithinImage(nc, nr, cs, rs, options={'imgMargins':options['imgMargins'], 'rounding':True}) # IMP*
-    csIW, rsIW = cs[possWithin].astype(int), rs[possWithin].astype(int)
+        raise Exception("Invalid input: 'theArray' must be a list or a NumPy ndarray")
+    return theDictionary
+def ArrayPx_2410(dExtVar, dCaSVar, rangeC):  # 1900-01-01; lm:2025-04-30; lm:2025-06-21
+    Rt = MatrixRt_2410(dExtVar, rangeC)
+    K = MatrixK_2410(dCaSVar, rangeC)
+    P = np.dot(K, Rt)
+    if False:  # avoidable check for readability
+        assert P.shape == (3, 4)
+    if rangeC == 'close':
+        P23 = ClipWithSign(P[2, 3], 1.e-14, np.inf)  # WATCH OUT: epsilon
+        Pa = P / P23
+        Px = np.hstack([Pa[0, :4], Pa[1, :4], Pa[2, :3]])
+    elif rangeC == 'long':
+        Po = P[:2, :]
+        Px = np.hstack([Po[0, :4], Po[1, :4]])
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return Px
+def CDRD2CURU_2410(cDs, rDs, dCaSVar, dDtrVar, rangeC, rtrnPossG=False, nc=None, nr=None, margin=0):  # undistort; potentially expensive; 2010-01-01; lm:2025-05-01; lm:2025-07-01
+    uDas, vDas = CR2UaVa_2410(cDs, rDs, dCaSVar, rangeC)
+    uUas, vUas, possG = UDaVDa2UUaVUa_2410(uDas, vDas, dDtrVar, rangeC, rtrnPossG=rtrnPossG)  # WATCH OUT: potentially expensive
+    cUs, rUs = UaVa2CR_2410(uUas, vUas, dCaSVar, rangeC)
+    if len(possG) > 0 and rtrnPossG and nc is not None and nr is not None:
+        cDsG, rDsG = [item[possG] for item in [cDs, rDs]]
+        possGInPossG = CR2PossWithinImage_2502(cDsG, rDsG, nc, nr, margin=margin, case='')
+        possG = possG[possGInPossG]
+    return cUs, rUs, possG
+def CDRD2XYZ_2410(cDs, rDs, planes, dMCS, rtrnPossG=False, margin=0):  # potentially expensive; 2010-01-01; lm:2025-05-05; lr:2025-07-02
+    Px, rangeC, dAllVar, ef, nc, nr = [dMCS[item] for item in ['Px', 'rangeC', 'dAllVar', 'ef', 'nc', 'nr']]
+    cUs, rUs, possG = CDRD2CURU_2410(cDs, rDs, dAllVar, dAllVar, rangeC, rtrnPossG=rtrnPossG, nc=nc, nr=nr, margin=margin)
+    xs, ys, zs, possGH = CURU2XYZ_2410(cUs, rUs, planes, Px, rangeC, rtrnPossG=rtrnPossG, dCamVar=dAllVar, ef=ef, nc=nc, nr=nr)
+    possG = np.intersect1d(possG, possGH, assume_unique=True)
+    return xs, ys, zs, possG
+def CDRDZ2XY_2410(cDs, rDs, zs, dMCS, rtrnPossG=False, margin=0):  # potentially expensive; 2010-01-01; lm:2025-05-05; lr:2025-07-02
+    planes = {'pxs': np.zeros(zs.shape), 'pys': np.zeros(zs.shape), 'pzs': np.ones(zs.shape), 'pts': -zs}
+    xs, ys, _, possG = CDRD2XYZ_2410(cDs, rDs, planes, dMCS, rtrnPossG=rtrnPossG, margin=margin)
+    return xs, ys, possG
+def CR2CRIntegerWithinImage_2502(cs, rs, nc, nr, margin=0, case='round'):  # 1900-01-01; lm:2025-05-28; lr:2025-07-07
+    csI, rsI = CR2CRInteger_2504(cs, rs, case=case)
+    possW = CR2PossWithinImage_2502(csI, rsI, nc, nr, margin=margin, case='')
+    csIW, rsIW = [item[possW] for item in [csI, rsI]]
     return csIW, rsIW
-def CR2PositionsWithinImage(nc, nr, cs, rs, options={}): # 202109131400 (last read 2022-07-06)
-    ''' comments:
-    .- input nc and nr are integers
-    .- input cs and rs are integer- or float-ndarrays
-    .- output possWithin is an integer-list
-    '''
-    keys, defaultValues = ['imgMargins', 'rounding'], [{'c0':0, 'c1':0, 'r0':0, 'r1':0, 'isComplete':True}, False]
-    options = CompleteADictionary(options, keys, defaultValues)
-    imgMargins = CompleteImgMargins(options['imgMargins'])
-    assert AreImgMarginsOK(nc, nr, imgMargins)
-    if options['rounding']:
-        cs, rs = CR2CRInteger(cs, rs)
-    cMin, cMax = imgMargins['c0'], nc-1-imgMargins['c1'] # recall that img[:, nc-1, :] is OK, but not img[:, nc, :]
-    rMin, rMax = imgMargins['r0'], nr-1-imgMargins['r1'] # recall that img[nr-1, :, :] is OK, but not img[nr, :, :]
-    possWithin = np.where((cs >= cMin) & (cs <= cMax) & (rs >= rMin) & (rs <= rMax))[0]
-    return possWithin
-def CR2UaVa(mainSet, cs, rs): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'sca', 'sra', 'oc' and 'or')
-        .- mainSet['sca'] and mainSet['sra'] are non-zero, but allowed to be negative
-    .- input cs and rs are floats or float-ndarrays of the same length
-    .- output uas and vas are floats or float-ndarrays of the same length of cs and rs
-    '''
-    uas = (cs - mainSet['oc']) * mainSet['sca']
-    vas = (rs - mainSet['or']) * mainSet['sra']
+def CR2CRInteger_2504(cs, rs, case='round'):  # 1900-01-01; lm:2025-05-28; lr:2025-07-13
+    if case == 'round':
+        csI = np.round(cs).astype(int)
+        rsI = np.round(rs).astype(int)
+    elif case == 'floor':
+        csI = np.floor(cs).astype(int)
+        rsI = np.floor(rs).astype(int)
+    else:
+        raise Exception("Invalid input: 'case' ('{}') must be 'round' or 'floor'".format(case))
+    return csI, rsI
+def CR2PossWithinImage_2502(cs, rs, nc, nr, margin=0, case=''):  # 1900-01-01; lm:2025-05-28; lr:2025-07-13
+    if len(cs) == 0 or len(rs) == 0:
+        return np.asarray([], dtype=int)
+    if case in ['round', 'floor']:
+        cs, rs = CR2CRInteger_2504(cs, rs, case=case)
+    cMin, cMax = -1/2 + margin, nc-1/2 - margin  # IMP*
+    rMin, rMax = -1/2 + margin, nr-1/2 - margin  # IMP*
+    possW = np.where((cs > cMin) & (cs < cMax) & (rs > rMin) & (rs < rMax))[0]  # WATCH OUT: "<" and ">" for safety
+    return possW
+def CR2UaVa_2410(cs, rs, dCaSVar, rangeC):  # lm:1900-01-01; lr:2025-05-01; lr:2025-06-30
+    if rangeC == 'close':
+        sca, sra = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sca', 'sra']]  # WATCH OUT: epsilon
+        uas = (cs - dCaSVar['oc']) * sca
+        vas = (rs - dCaSVar['or']) * sra
+    elif rangeC == 'long':
+        sc, sr = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sc', 'sr']]  # WATCH OUT: epsilon
+        uas = (cs - dCaSVar['oc']) * sc  # uas are actually us in this case
+        vas = (rs - dCaSVar['or']) * sr  # vas are actually vs in this case
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
     return uas, vas
-def CURU2CDRD(mainSet, cUs, rUs): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary
-    .- input cUs and rUs are floats or float-ndarrays of the same length
-    .- output cDs and rDs are floats or float-ndarrays of the same length of cUs and rUs
-    '''
-    uUas, vUas = CR2UaVa(mainSet, cUs, rUs)
-    uDas, vDas = UUaVUa2UDaVDa(mainSet, uUas, vUas)
-    cDs, rDs = UaVa2CR(mainSet, uDas, vDas)
-    return cDs, rDs
-def CUh2RUh(horizonLine, cUhs): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input horizonLine is a dictionary (including at least 'ccUh1', 'crUh1' and 'ccUh0')
-        .- the horizonLine is 'ccUh1' * cUhs + 'crUh1' * rUhs + 'ccUh0' = 0, i.e., rUhs = - ('ccUh1' * cUhs + 'ccUh0') / 'crUh1'
-    .- input cUhs is a float-ndarray
-    .- output rUhs is a float-ndarray
-    '''
-    crUh1 = ClipWithSign(horizonLine['crUh1'], 1.e-8, 1.e+8)
-    rUhs = - (horizonLine['ccUh1'] * cUhs + horizonLine['ccUh0']) / crUh1
+def CURU2CDRD_2410(cUs, rUs, dCaSVar, dDtrVar, rangeC, rtrnPossG=False, nc=None, nr=None, margin=0):  # distort; 2010-01-01; lm:2025-05-01; lm:2025-07-01
+    uUas, vUas = CR2UaVa_2410(cUs, rUs, dCaSVar, rangeC)
+    uDas, vDas, possG = UUaVUa2UDaVDa_2410(uUas, vUas, dDtrVar, rangeC, rtrnPossG=rtrnPossG)
+    cDs, rDs = UaVa2CR_2410(uDas, vDas, dCaSVar, rangeC)
+    if len(possG) > 0 and rtrnPossG and nc is not None and nr is not None:
+        cDsG, rDsG = [item[possG] for item in [cDs, rDs]]
+        possGInPossG = CR2PossWithinImage_2502(cDsG, rDsG, nc, nr, margin=margin, case='')
+        possG = possG[possGInPossG]
+    return cDs, rDs, possG
+def CURU2XYZ_2410(cUs, rUs, planes, Px, rangeC, rtrnPossG=False, dCamVar=None, ef=None, nc=None, nr=None):  # 2000-01-01; lm:2025-05-01; lr:2025-07-02
+    if rangeC == 'close':
+        A11s, A12s, A13s, bb1s = Px[0] - cUs * Px[8], Px[1] - cUs * Px[9], Px[2] - cUs * Px[10], cUs - Px[3]
+        A21s, A22s, A23s, bb2s = Px[4] - rUs * Px[8], Px[5] - rUs * Px[9], Px[6] - rUs * Px[10], rUs - Px[7]
+        A31s, A32s, A33s, bb3s = planes['pxs'], planes['pys'], planes['pzs'], -planes['pts']
+    elif rangeC == 'long':
+        A11s, A12s, A13s, bb1s = Px[0], Px[1], Px[2], cUs - Px[3]
+        A21s, A22s, A23s, bb2s = Px[4], Px[5], Px[6], rUs - Px[7]
+        A31s, A32s, A33s, bb3s = planes['pxs'], planes['pys'], planes['pzs'], -planes['pts']
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    dens = A11s * (A22s * A33s - A23s * A32s) + A12s * (A23s * A31s - A21s * A33s) + A13s * (A21s * A32s - A22s * A31s)
+    dens = ClipWithSign(dens, 1.e-14, np.inf)  # WATCH OUT: epsilon
+    xs = (bb1s * (A22s * A33s - A23s * A32s) + A12s * (A23s * bb3s - bb2s * A33s) + A13s * (bb2s * A32s - A22s * bb3s)) / dens
+    ys = (A11s * (bb2s * A33s - A23s * bb3s) + bb1s * (A23s * A31s - A21s * A33s) + A13s * (A21s * bb3s - bb2s * A31s)) / dens
+    zs = (A11s * (A22s * bb3s - bb2s * A32s) + A12s * (bb2s * A31s - A21s * bb3s) + bb1s * (A21s * A32s - A22s * A31s)) / dens
+    if rtrnPossG:
+        cUsR, rUsR, possG = XYZ2CURU_2410(xs, ys, zs, Px, rangeC, rtrnPossG=rtrnPossG, dCamVar=dCamVar, ef=ef, nc=nc, nr=nr)
+        cUsG, rUsG, cUsRG, rUsRG = [item[possG] for item in [cUs, rUs, cUsR, rUsR]]
+        possGInPossG = np.where(np.hypot(cUsRG - cUsG, rUsRG - rUsG) < 1.e-6)[0]  # WATCH OUT: epsilon
+        possG = possG[possGInPossG]
+        xsG, ysG, zsG = [item[possG] for item in [xs, ys, zs]]
+        pxsG, pysG, pzsG, ptsG = [planes[item][possG] for item in ['pxs', 'pys', 'pzs', 'pts']]
+        possGInPossG = np.where(np.abs(pxsG * xsG + pysG * ysG + pzsG * zsG + ptsG) < 1.e-6)[0]  # WATCH OUT: epsilon
+        possG = possG[possGInPossG]
+    else:
+        possG = np.asarray([], dtype=int)
+    return xs, ys, zs, possG
+def CUh2RUh_2410(cUhs, dHor, eps=1.e-12):  # 2000-01-01; lm:2025-04-25; lr:2025-07-02
+    crUh1 = ClipWithSign(dHor['crUh1'], eps, np.inf)
+    rUhs = - (dHor['ccUh1'] * cUhs + dHor['ccUh0']) / crUh1
     return rUhs
-def ClipWithSign(xs, x0, x1): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input xs is a float of a float-ndarray
-    .- input x0 and x1 are floats so that 0 <= x0 <= x1
-    .- output xs is a float of a float-ndarray
-        .- output xs is in [-x1, -x0] U [x0, x1] and retains the signs of input xs
-    '''
-    assert x1 >= x0 >= 0.
-    signs = np.sign(xs)
-    if isinstance(signs, np.ndarray): # ndarray
-        signs[signs == 0] = 1
-    elif signs == 0: # float and 0
-        signs = 1
+def CleanAFld_2504(pathFld):  # 2000-01-01; lm:2025-04-19; lr:2025-06-27
+    if not os.path.exists(pathFld):
+        return None
+    for item in os.listdir(pathFld):
+        pathItem = os.path.join(pathFld, item)
+        if os.path.isfile(pathItem) or os.path.islink(pathItem):
+            os.remove(pathItem)
+        elif os.path.isdir(pathItem):
+            shutil.rmtree(pathItem)
+    return None
+def ClipWithSign(xs, x0, x1):  # 1900-01-01; lm:2025-05-28; lr:2025-07-14
+    if not (0 < x0 < x1):
+        raise Exception("Invalid input: invalid 'x0' and/or 'x1'; must satisfy 0 < x0 < x1")
+    signs = np.where(np.sign(xs) == 0, 1, np.sign(xs))
     xs = signs * np.clip(np.abs(xs), x0, x1)
     return xs
-def CloudOfPoints2InnerPositionsForPolyline(xs, ys, polyline, options={}): # 202207021000 (last read 2022-07-02, checked graphically with auxiliar code)
-    ''' comments:
-    .- input xs and ys float-ndarrays
-    .- input polyline is a dictionary (including at least 'xs' and 'ys')
-        .- input polyline can be open or closed, and its orientation is irrelevant
-    .- output posIns is a integer-list os the positions within the polyline
-        .- this function does not call segment-related functions: it is written careful and independently
-    '''
-    keys, defaultValues = ['epsilon'], [1.e-11]
-    options = CompleteADictionary(options, keys, defaultValues)
-    eps = options['epsilon']
+def CloudOfPoints2PossInsidePolyline_2508(xsC, ysC, polyline, eps_xy=1e-9):  # 1900-01-01; lm:2025-06-12; lr:2025-07-02
     xsP, ysP = polyline['xs'], polyline['ys']
-    if DistanceFromAPointToAPoint(xsP[0], ysP[0], xsP[-1], ysP[-1]) < eps:
-        xsP, ysP = [item[0:-1] for item in [xsP, ysP]]
-    xsP, ysP, xsM, ysM = xsP - np.mean(xsP), ysP - np.mean(ysP), xs - np.mean(xsP), ys - np.mean(ysP)
-    possIn0 = [item for item in range(len(xsM)) if np.min(np.sqrt((xsM[item]-xsP)**2+(ysM[item]-ysP)**2)) < 1.e+5 * eps] # IMP* 1.e+5
-    xsC, ysC, possMR0 = np.concatenate((xsP, xsM)), np.concatenate((ysP, ysM)), [item for item in range(len(xsM)) if item not in possIn0]
-    while True:
-        xO, yO = [np.max(item) + (2.5 + np.random.random()) * (5.0 + np.std(item)) for item in [xsC, ysC]]
-        anglesP, anglesMR0 = np.angle((xO - xsP) + 1j * (yO - ysP)), np.angle((xO - xsM[possMR0]) + 1j * (yO - ysM[possMR0]))
-        anglesP, anglesMR0 = np.meshgrid(anglesP, anglesMR0)
-        anglesP, anglesMR0 = [np.reshape(item, -1) for item in [anglesP, anglesMR0]]
-        if np.min(np.abs(anglesP - anglesMR0)) > 1.e+1 * eps: # IMP*
-            break
-    mx1, my1, mx2, my2, mx3, my3, mx4, my4 = [np.zeros((len(xsM), len(xsP))) for item in range(8)] # row: point of the mesh, column: segment of the boundary polyline
-    for pos0B in range(len(xsP)): # run through the points of the boundary polyline
-        pos1B = (pos0B + 1) % len(xsP)
-        mx1[:, pos0B], my1[:, pos0B] = xsP[pos0B] * np.ones(len(xsM)), ysP[pos0B] * np.ones(len(xsM)) # point0 of the segment of the boundary
-        mx2[:, pos0B], my2[:, pos0B] = xsP[pos1B] * np.ones(len(xsM)), ysP[pos1B] * np.ones(len(xsM)) # point1 of the segment of the boundary
-    for posM in range(len(xsM)): # run through the points of the mesh
-        mx3[posM, :], my3[posM, :] = xsM[posM] * np.ones(len(xsP)), ysM[posM] * np.ones(len(xsP)) # point of the mesh
-        mx4[posM, :], my4[posM, :] = xO * np.ones(len(xsP)), yO * np.ones(len(xsP)) # outer point
-    mA11, mA12, mA21, mA22, mb1, mb2 = my1 - my2, mx2 - mx1, my3 - my4, mx4 - mx3, mx2 * my1 - mx1 * my2, mx4 * my3 - mx3 * my4
-    mDets = mA11 * mA22 - mA12 * mA21
-    mDets[np.abs(mDets) < eps] = np.NaN
-    mxI = (mb1 * mA22 - mb2 * mA12) / mDets
-    myI = (mb2 * mA11 - mb1 * mA21) / mDets
-    mxLim0, myLim0 = np.maximum(np.minimum(mx1, mx2), np.minimum(mx3, mx4)), np.maximum(np.minimum(my1, my2), np.minimum(my3, my4))
-    mxLim1, myLim1 = np.minimum(np.maximum(mx1, mx2), np.maximum(mx3, mx4)), np.minimum(np.maximum(my1, my2), np.maximum(my3, my4))
-    dsI = np.sqrt((mx3 - mxI) ** 2 + (my3 - myI) ** 2)
-    auxs = np.sum((mxI >= mxLim0-eps) & (mxI <= mxLim1+eps) & (myI >= myLim0-eps) & (myI <= myLim1+eps) & (dsI < eps), axis=1)
-    possIn1 = list(np.where(auxs > 0)[0])
-    auxs = np.sum((mxI >= mxLim0-eps) & (mxI <= mxLim1+eps) & (myI >= myLim0-eps) & (myI <= myLim1+eps), axis=1)
-    possIn2 = list(np.where(auxs % 2 == 1)[0])
-    possIn = list(set(possIn0 + possIn1 + possIn2))
+    nP = len(xsP)
+    if nP < 3:
+        raise Exception("Invalid input: polyline must have at least 3 points")
+    if np.hypot(xsP[0] - xsP[-1], ysP[0] - ysP[-1]) < eps_xy:  # open the polyline if it comes closed
+        xsP, ysP = xsP[:-1], ysP[:-1]
+        nP = len(xsP)
+    possIn = []
+    for posC, (xC, yC) in enumerate(zip(xsC, ysC)):
+        count = 0
+        for posP in range(nP):
+            x0, y0 = xsP[posP], ysP[posP]
+            x1, y1 = xsP[(posP + 1) % nP], ysP[(posP + 1) % nP]
+            if ((y0 > yC) != (y1 > yC)):
+                xcross = (x1 - x0) * (yC - y0) / (y1 - y0 + 1e-14) + x0  # WATCH OUT; epsilon; it was 1.e-20
+                if xC < xcross + eps_xy:
+                    count += 1
+            dx, dy = x1 - x0, y1 - y0
+            num = abs(dy * (xC - x0) - dx * (yC - y0))
+            den = np.hypot(dx, dy)
+            if den > 0 and num < eps_xy * den:
+                dot = (xC - x0) * (x1 - x0) + (yC - y0) * (y1 - y0)
+                if 0 <= dot <= den ** 2:
+                    count = 1
+                    break
+        if count % 2 == 1:
+            possIn.append(posC)
+    possIn = np.asarray(possIn, dtype=int)
     return possIn
-def CloudOfPoints2Rectangle(xs, ys, options={}): # 202110281047 (last read 2022-07-02, checked graphically with auxiliar code)
-    ''' comments:
-    .- input xs and ys are float-ndarrays of the same length
-    .- output xcs and ycs are 4-float-ndarrays (4 corners, oriented clockwise, the first corner is the closest to the first point of the cloud)
-    .- output area is a float
-    '''
-    keys, defaultValues = ['margin'], [0.]
-    options = CompleteADictionary(options, keys, defaultValues)
-    xcs, ycs, area = None, None, 1.e+11
-    for angleH in np.linspace(0, np.pi / 2., 1000):
-        xcsH, ycsH, areaH = CloudOfPoints2RectangleAnalysisForAnAngle(angleH, xs, ys, options={'margin':options['margin']})
+def CloudOfPoints2RectangleAux_2504(angle, xs, ys, margin=0.):  # 1900-01-01; lm:2025-05-06; lr:2025-06-30
+    lDs = - np.sin(angle) * xs + np.cos(angle) * ys  # signed-distances to D-line dir = (+cos, +sin) through origin (0, 0); positive above
+    lD0 = {'lx': -np.sin(angle), 'ly': +np.cos(angle), 'lt': -(np.min(lDs)-margin)}
+    lD1 = {'lx': -np.sin(angle), 'ly': +np.cos(angle), 'lt': -(np.max(lDs)+margin)}
+    lPs = + np.cos(angle) * xs + np.sin(angle) * ys  # signed-distances to P-line dir = (+sin, -cos) through origin (0, 0); positive right
+    lP0 = {'lx': +np.cos(angle), 'ly': +np.sin(angle), 'lt': -(np.min(lPs)-margin)}
+    lP1 = {'lx': +np.cos(angle), 'ly': +np.sin(angle), 'lt': -(np.max(lPs)+margin)}
+    xcs, ycs = [np.zeros(4) for _ in range(2)]
+    xcs[0], ycs[0] = IntersectionOfTwoLines_2506(lD0, lP0)[:2]
+    xcs[1], ycs[1] = IntersectionOfTwoLines_2506(lP0, lD1)[:2]
+    xcs[2], ycs[2] = IntersectionOfTwoLines_2506(lD1, lP1)[:2]
+    xcs[3], ycs[3] = IntersectionOfTwoLines_2506(lP1, lD0)[:2]
+    area = (np.max(lDs) - np.min(lDs) + 2 * margin) * (np.max(lPs) - np.min(lPs) + 2 * margin)  # IMP*
+    return xcs, ycs, area
+def CloudOfPoints2Rectangle_2504(xs, ys, margin=0.):  # 1900-01-01; lm:2025-07-07; lr:2025-07-10
+    xcs, ycs, area = None, None, np.inf
+    for angleH in np.linspace(0, np.pi / 2, 1000):  # WATCH OUT; a capon
+        xcsH, ycsH, areaH = CloudOfPoints2RectangleAux_2504(angleH, xs, ys, margin=margin)  # already oriented clockwise
         if areaH < area:
-            xcs, ycs, area = [copy.deepcopy(item) for item in [xcsH, ycsH, areaH]]
-    pos0 = np.argmin(np.sqrt((xcs - xs[0]) ** 2 + (ycs - ys[0]) ** 2)) # the first corner is the closest to the first point (they are oriented clockwise)
-    xcs = np.asarray([xcs[pos0], xcs[(pos0+1)%4], xcs[(pos0+2)%4], xcs[(pos0+3)%4]])
-    ycs = np.asarray([ycs[pos0], ycs[(pos0+1)%4], ycs[(pos0+2)%4], ycs[(pos0+3)%4]])
+            xcs, ycs, area = xcsH, ycsH, areaH
+    pos0 = np.argmin(np.hypot(xcs - xs[0], ycs - ys[0]))
+    xcs, ycs = np.roll(xcs, -pos0), np.roll(ycs, -pos0)
+    if True:  # avoidable check for readability
+        assert len(xcs) == len(ycs) == 4
     return xcs, ycs, area
-def CloudOfPoints2RectangleAnalysisForAnAngle(angle, xs, ys, options={}): # 202110280959 (last read 2022-07-02, checked graphically with auxiliar code)
-    ''' comments:
-    .- input angle is a float (0 = East; pi/2 = North)
-    .- input xs and ys are float-ndarrays of the same length
-    .- output xcs and ycs are 4-float-ndarrays (4 corners, oriented clockwise)
-    .- output area is a float
-    '''
-    keys, defaultValues = ['margin'], [0.]
-    options = CompleteADictionary(options, keys, defaultValues)
-    lDs = - np.sin(angle) * xs + np.cos(angle) * ys # signed-distances to D-line dir = (+cos, +sin) through origin (0, 0)
-    lPs = + np.cos(angle) * xs + np.sin(angle) * ys # signed-distances to P-line dir = (+sin, -cos) through origin (0, 0)
-    area = (np.max(lDs) - np.min(lDs) + 2 * options['margin']) * (np.max(lPs) - np.min(lPs) + 2 * options['margin'])
-    lD0 = {'lx':-np.sin(angle), 'ly':+np.cos(angle), 'lt':-(np.min(lDs)-options['margin'])}
-    lD1 = {'lx':-np.sin(angle), 'ly':+np.cos(angle), 'lt':-(np.max(lDs)+options['margin'])}
-    lP0 = {'lx':+np.cos(angle), 'ly':+np.sin(angle), 'lt':-(np.min(lPs)-options['margin'])}
-    lP1 = {'lx':+np.cos(angle), 'ly':+np.sin(angle), 'lt':-(np.max(lPs)+options['margin'])}
-    xcs, ycs = [np.zeros(4) for item in range(2)]
-    xcs[0], ycs[0] = IntersectionOfTwoLines(lD0, lP0, options={})[0:2] 
-    xcs[1], ycs[1] = IntersectionOfTwoLines(lP0, lD1, options={})[0:2]
-    xcs[2], ycs[2] = IntersectionOfTwoLines(lD1, lP1, options={})[0:2]
-    xcs[3], ycs[3] = IntersectionOfTwoLines(lP1, lD0, options={})[0:2]
-    return xcs, ycs, area
-def CompleteADictionary(theDictionary, keys, defaultValues): # 202109101200 (last read 2022-06-29)
-    ''' comments:
-    .- input theDictionary is a dictionary
-    .- input keys is a string-list
-    .- input defaultValues is a list of the same length of keys or a single value
-    .- output theDictionary is a dictionary that includes keys and defaultValues for the keys not in input theDictionary
-    '''
-    if set(keys) <= set(theDictionary.keys()):
-        pass
-    else:
-        if isinstance(defaultValues, (list)): # defaultValues is a list
-            assert len(keys) == len(defaultValues)
-            for posKey, key in enumerate(keys):
-                if key not in theDictionary.keys(): # only assigns if there is no key
-                    theDictionary[key] = defaultValues[posKey]
-        else: # defaultValues is a single value
-            for key in keys:
-                if key not in theDictionary.keys(): # only assigns if there is no key
-                    theDictionary[key] = defaultValues
-    return theDictionary
-def CompleteImgMargins(imgMargins): # 202109101200 (last read 2022-07-05)
-    ''' comments:
-    .- input imgMargins is a dictionary or None
-        .- if imgMargins['isComplete'], then it does nothing
-        .- if imgMargins is None, then it is initialized to {'c':0, 'r':0}
-        .- if imgMargins includes 'c', then generates 'c0' and 'c1' (if not included); otherwise, 'c0' and 'c1' must already be included
-        .- if imgMargins includes 'r', then generates 'r0' and 'r1' (if not included); otherwise, 'r0' and 'r1' must already be included
-        .- imgMargins['c*'] and imgMargins['r*'] are integers
-    .- output imgMargins is a dictionary (including at least 'c0', 'c1', 'r0' and 'r1' and 'isComplete'; not necessarily 'c' and 'r')
-        .- imgMargins['c*'] and imgMargins['r*'] are integers
-    '''
-    if imgMargins is not None and 'isComplete' in imgMargins.keys() and imgMargins['isComplete']:
-        return imgMargins
-    if imgMargins is None:
-        imgMargins = {'c':0, 'r':0}
-    for letter in ['c', 'r']:
-        try:
-            assert int(imgMargins[letter]) == imgMargins[letter]
-        except:
-            assert all([int(imgMargins[letter+number]) == imgMargins[letter+number] for number in ['0', '1']])
-            continue # go to the next letter
-        for number in ['0', '1']:
-            try:
-                assert int(imgMargins[letter+number]) == imgMargins[letter+number]
-            except:
-                imgMargins[letter+number] = imgMargins[letter]
-    imgMargins['isComplete'] = True
-    return imgMargins
-def Date2Datenum(date): # 202109131100 (last read 2022-11-10)
-    ''' comments:
-    .- input date is a 17-integer-string
-    .- output datenum is a float (the unit is one day)
-    '''
-    datenum = Datetime2Datenum(Date2Datetime(date))
+def Date2Datenum_2504(date):  # lm:2010-01-01; lr:2025-07-08
+    datenum = Datetime2Datenum_2504(Date2Datetime_2504(date))
     return datenum
-def Date2Datetime(date): # 202109131100 (last read 2022-07-09)
-    ''' comments:
-    .- input date is a 17-integer-string
-    .- output theDatetime is a datetime.datetime
-    '''
-    theDatetime = datetime.datetime(int(date[0:4]), int(date[4:6]), int(date[6:8]), int(date[8:10]), int(date[10:12]), int(date[12:14]), int(date[14:17]) * 1000)
+def Date2Datetime_2504(date):  # lm:2025-04-09; lr:2025-07-08
+    year, month, day = int(date[:4]), int(date[4:6]), int(date[6:8])
+    hour, minute, second = int(date[8:10]), int(date[10:12]), int(date[12:14])
+    if len(date) == 17:
+        microsecond = int(date[14:17]) * 1000
+    elif len(date) == 20:
+        microsecond = int(date[14:])
+    else:
+        raise Exception("Invalid input: 'date' ('{}') must have length 17 or 20".format(date))
+    theDatetime = datetime.datetime(year, month, day, hour, minute, second, microsecond)
+    if False:  # avoidable check for readability
+        assert Datetime2Date_2504(theDatetime, length=len(date)) == date
     return theDatetime
-def Datetime2Datenum(theDatetime): # 202109131100 (last read 2022-07-09)
-    ''' comment:
-    .- input theDatetime is a datetime.datetime
-    .- output datenum is a float (the unit is one day)
-    '''
-    datenum = 366. + datetime.date.toordinal(datetime.date(theDatetime.year, theDatetime.month, theDatetime.day)) + (theDatetime.hour + (theDatetime.minute + (theDatetime.second + theDatetime.microsecond / 1.e+6) / 60.) / 60.) / 24.
+def Datetime2Date_2504(theDatetime, length=17):  # lm:2025-04-09; lr:2025-07-08
+    year, month, day = str(theDatetime.year).zfill(4), str(theDatetime.month).zfill(2), str(theDatetime.day).zfill(2)
+    hour, minute, second = str(theDatetime.hour).zfill(2), str(theDatetime.minute).zfill(2), str(theDatetime.second).zfill(2)
+    if length == 17:
+        millisecond = str(int(theDatetime.microsecond / 1.e+3)).zfill(3)  # IMP*; do not round
+        date = '{}{}{}{}{}{}{}'.format(year, month, day, hour, minute, second, millisecond)
+    elif length == 20:
+        microsecond = str(int(theDatetime.microsecond)).zfill(6)
+        date = '{}{}{}{}{}{}{}'.format(year, month, day, hour, minute, second, microsecond)
+    else:
+        raise Exception("Invalid input: 'datetime' has invalid value ('{}')".format(theDatetime))
+    return date
+def Datetime2Datenum_2504(theDatetime):  # lm:2025-04-09; lr:2025-07-08
+    base = theDatetime.toordinal()
+    frac = (theDatetime - datetime.datetime(theDatetime.year, theDatetime.month, theDatetime.day)).total_seconds()/86400
+    datenum = base + frac + 366  # the 366 is to start in year 0, as matlab
     return datenum
-def Dictionary2Array(keys, theDictionary): # 202206291320 (last read 2022-06-29)
-    ''' comments:
-    .- input keys is a string-list
-    .- input theDictionary is a dictionary
-    .- output theArray is a ndarray
-    '''
-    theArray = np.asarray([theDictionary[key] for key in keys])
-    return theArray
-def DisplayCRInImage(img, cs, rs, options={}): # 202109141700 (last read 2022-07-12)
-    ''' comments:
-    .- input img is a cv2-image
-    .- input cs and rs are integer- or float-ndarrays of the same length (not necessarily within the image)
-    .- output img is a cv2-image
-    '''
-    keys, defaultValues = ['colors', 'imgMargins', 'size'], [[[0, 0, 0]], {'c0':0, 'c1':0, 'r0':0, 'r1':0, 'isComplete':True}, None]
-    options = CompleteADictionary(options, keys, defaultValues)
-    csIW, rsIW = CR2CRIntegerWithinImage(img.shape[1], img.shape[0], cs, rs, {'imgMargins':options['imgMargins']})
-    if len(csIW) == len(rsIW) == 0:
-        return img
-    if len(options['colors']) == 1:
-        colors = [options['colors'][0] for item in range(len(csIW))]
-    else:
-        assert len(options['colors']) >= len(csIW) == len(rsIW)
-        colors = options['colors']
-    if options['size'] is not None:
-        size = int(options['size'])
-    else:
-        size = int(np.sqrt(img.shape[0]*img.shape[1])/150) + 1
+def DisplayCRInImage_2504(img, cs, rs, margin=0, factor=1., colors=None, pathOut=None):  # 1900-01-01; lm:2025-05-28; lr:2025-06-27
+    img = PathImgOrImg2Img(img)
+    nr, nc = img.shape[:2]
+    imgOut = img.copy()  # IMP*: otherwise, if imgNew = DisplayCRInImage_2504(img, ...) then img is also modified
+    csIW, rsIW = CR2CRIntegerWithinImage_2502(cs, rs, nc, nr, margin=margin)
+    if len(csIW) == 0:
+        return imgOut
+    if colors is None:
+        colors = [[0, 0, 0]]
+    colors = (colors * ((len(csIW) + len(colors) - 1) // len(colors)))[:len(csIW)]
+    radius = int(factor * np.sqrt(nc * nr) / 2.e+2 + 1)
     for pos in range(len(csIW)):
-        img = cv2.circle(img, (csIW[pos], rsIW[pos]), size, colors[pos], -1)
-    return img
-def DistanceFromAPointToAPoint(x0, y0, x1, y1): # 202206201445 (last read 2022-06-20)
-    ''' comments:
-    .- input x0, y0, x1 and y1 are floats or float-ndarrays of the same length
-    .- output distance is a float or a float-ndarray
-    '''
-    distance = np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
-    return distance
-def EulerianAngles2R(ph, sg, ta): # 202109131100 (last read 2022-06-29)
-    ''' comments:
-    .- input ph, sg and ta are floats
-    .- output R is a orthonormal 3x3-float-ndarray positively oriented
-    '''
-    eu, ev, ef = EulerianAngles2UnitVectors(ph, sg, ta)
-    R = UnitVectors2R(eu, ev, ef)
+        cv2.circle(imgOut, (csIW[pos], rsIW[pos]), radius, colors[pos], -1)
+    if pathOut is not None:
+        os.makedirs(os.path.dirname(pathOut), exist_ok=True)
+        cv2.imwrite(pathOut, imgOut)
+    return imgOut
+def EstimateScatterSize_2506(xs, ys, fw, fh, dpi):  # 2000-01-01; lm:2025-07-02; lm:2025-07-14
+    dx, dy = np.max(xs) - np.min(xs), np.max(ys) - np.min(ys)
+    ipux, ipuy = fw / dx, fh / dy  # inches per unit x/y
+    dpuxy = dpi * min(ipux, ipuy)  # dots per unit x/y = dots per inch (dpi) * inches per unit x/y
+    size = (dpuxy * min(dx, dy)) ** 2 / len(xs)
+    size = size * 0.49  # a capon; 0.7**2
+    return size
+def FindAffineA01_2504(xs0, ys0, xs1, ys1):  # 1900-01-01; lm:2025-05-06; lr:2025-06-26
+    minNOfPoints = 3
+    if not (len(xs0) == len(ys0) == len(xs1) == len(ys1) >= minNOfPoints):
+        return None
+    A, b = np.zeros((2 * len(xs0), 6)), np.zeros(2 * len(xs0))  # IMP*; initialize with zeroes
+    poss0, poss1 = Poss0AndPoss1InFind2DTransform_2504(len(xs0))
+    A[poss0, 0], A[poss0, 1], A[poss0, 2], b[poss0] = xs0, ys0, np.ones(xs0.shape), xs1
+    A[poss1, 3], A[poss1, 4], A[poss1, 5], b[poss1] = xs0, ys0, np.ones(xs0.shape), ys1
+    try:
+        AT = np.transpose(A)
+        A01 = np.linalg.solve(np.dot(AT, A), np.dot(AT, b))
+    except Exception:  # aligned points
+        return None
+    return A01
+def GHBathyExtractVideoToPathFldFrames(pathFldMain, video, active=True, extsVids=['mp4', 'avi', 'mov'], fps=0., round=True, stamp='millisecond', extImg='png', overwrite=False):  # lm:2025-06-27; lr:2025-07-14
+    pathFldVid = os.path.join(pathFldMain, 'data', 'videos', video)
+    pathFldDPlanviews, pathFldDFrames = [os.path.join(pathFldVid, item) for item in ['planviews', 'frames']]
+    if os.path.exists(pathFldDPlanviews) and os.path.exists(pathFldDFrames):
+        raise Exception("Invalid input: both 'frames' and 'planviews' found at '{}'".format(os.sep.join(pathFldVid.split(os.sep)[-2:])))  # WATCH OUT: [-2:] formatting
+    pathFldFrames = next((item for item in [pathFldDPlanviews, pathFldDFrames] if os.path.exists(item)), None)
+    pathVid = GHLookFor0Or1PathVideoOrFail(pathFldVid, extsVids=extsVids)
+    if pathVid == '':  # no video, there must be frames in pathFldFrames
+        if pathFldFrames is None or len(os.listdir(pathFldFrames)) == 0:
+            raise Exception("Unexpected condition: neither video nor frames found at '{}'".format(os.sep.join(pathFldVid.split(os.sep)[-2:])))  # WATCH OUT: [-2:] formatting
+    else:
+        pathFldFrames = os.path.join(pathFldMain, 'scratch', 'frames', video)  # IMP*: nomenclature
+        if active and (not os.path.exists(pathFldFrames) or len(os.listdir(pathFldFrames)) == 0 or overwrite):
+            GHExtractVideo(pathVid, pathFldFrames, fps=fps, round=round, stamp=stamp, extImg=extImg, overwrite=overwrite)
+    return pathFldFrames
+def GHBathyLoadVideos4Dates(pathFldMain):  # lm:2025-07-08; lr:2025-07-14
+    pathJson = os.path.join(pathFldMain, 'data', 'videos4dates.json')  # IMP*: nomenclature
+    try:
+        with open(pathJson, 'r') as f:
+            videos4dates = json.load(f)
+    except Exception as eTMP:
+        raise Exception("Invalid input: failed to read '{}': {}".format(pathJson, eTMP))
+    return videos4dates
+def GHBathyParAndVideos(pathFldMain):  # lm:2025-07-08; lr:2025-07-14
+    par = GHLoadPar(pathFldMain) | {'videos4dates': GHBathyLoadVideos4Dates(pathFldMain)}
+    pathFldDVideos = os.path.join(pathFldMain, 'data', 'videos')
+    if not os.path.exists(pathFldDVideos) or len([item.name for item in os.scandir(pathFldDVideos) if item.is_dir()]) == 0:
+        raise Exception("Unexpected condition: no videos available to obtain bathymetries")
+    videos_available = sorted([item.name for item in os.scandir(pathFldDVideos) if item.is_dir()])
+    videos = sorted(set([item for sublist in par['videos4dates'].values() for item in sublist]))  # videos required
+    videos_missing = set(videos) - set(videos_available)  # 2025-07-10
+    if videos_missing:
+        raise Exception("Invalid input: missing videos {}".format(videos_missing))
+    if len(videos) == 0:
+        raise Exception("Unexpected condition: no videos available to obtain bathymetries")
+    return par, videos
+def GHBathyPlotBath(pathImg, date, xs, ys, zbs, ezbs, min_depth, max_depth, fw, fh, fontsize, dpi=100, thereIsGT=False, zbsGT=None, title2='self error [m]'):  # lm:2025-07-09; lr:2025-07-13
+    fw, fh = GHFwFh2FwFh(fw, fh, xs, ys)
+    if thereIsGT:
+        nOfC = 3
+    else:
+        nOfC = 2
+    plt.figure(figsize=(nOfC*fw, fh))
+    size = EstimateScatterSize_2506(xs, ys, fw, fh, dpi)
+    plt.rcParams.update(LoadParamsC(fontsize=fontsize))
+    plt.suptitle('date = {}'.format(date))
+    plt.subplot(1, nOfC, 1)
+    plt.title(r'$z_b$ [m]')
+    plt.plot(np.min(xs), np.min(ys), 'w.'); plt.plot(np.max(xs), np.max(ys), 'w.')
+    sct = plt.scatter(xs, ys, marker='o', c=zbs, edgecolor='none', vmin=-max_depth, vmax=-min_depth, s=size, cmap='gist_earth')
+    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    plt.subplot(1, nOfC, 2)
+    plt.title(title2)
+    plt.plot(np.min(xs), np.min(ys), 'w.'); plt.plot(np.max(xs), np.max(ys), 'w.')
+    sct = plt.scatter(xs, ys, marker='o', c=ezbs, vmin=0, vmax=1, edgecolor='none', s=size, cmap='jet')  # IMP*: vmax
+    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    if thereIsGT:
+        plt.subplot(1, nOfC, nOfC)
+        plt.title('error [m]')
+        plt.plot(np.min(xs), np.min(ys), 'w.'); plt.plot(np.max(xs), np.max(ys), 'w.')
+        sct = plt.scatter(xs, ys, marker='o', c=zbs-zbsGT, vmin=-2, vmax=2, edgecolor='none', s=size, cmap='seismic_r')  # IMP*: vmin, vmax
+        plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(pathImg), exist_ok=True)
+    plt.savefig(pathImg, dpi=dpi)
+    plt.close()
+    return None
+def GHBathyPlotMesh(pathImg, xs, ys, fw, fh, fontsize, dpi=100, xsBoun=None, ysBoun=None):  # lm:2025-07-05; lr:2025-07-13
+    if xsBoun is not None and ysBoun is not None and len(xsBoun) == len(ysBoun):  # boundary
+        xsAll, ysAll = np.concatenate((xs, xsBoun)), np.concatenate((ys, ysBoun))
+    else:
+        xsAll, ysAll = xs, ys
+    fw, fh = GHFwFh2FwFh(fw, fh, xsAll, ysAll)
+    plt.figure(figsize=(fw, fh))
+    plt.rcParams.update(LoadParamsC(fontsize=fontsize))
+    size = np.sqrt(EstimateScatterSize_2506(xs, ys, fw, fh, dpi)) / 10  # IMP*: np.sqrt() and 10
+    plt.plot(xs, ys, 'k.', markersize=size)
+    if xsBoun is not None and ysBoun is not None and len(xsBoun) == len(ysBoun):  # boundary
+        plt.plot(list(xsBoun) + [xsBoun[0]], list(ysBoun) + [ysBoun[0]], 'm-', lw=3*size)  # IMP*: 'm-' and 3*
+    plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(pathImg), exist_ok=True)
+    plt.savefig(pathImg, dpi=dpi)
+    plt.close()
+    return None
+def GHBathyPlotModes(pathImg, xs, ys, phases, amplitudes, T, fw, fh, fontsize, dpi=100):  # lm:2025-06-30; lr:2025-07-13
+    fw, fh = GHFwFh2FwFh(fw, fh, xs, ys)
+    size = EstimateScatterSize_2506(xs, ys, fw, fh, dpi)
+    plt.figure(figsize=(2*fw, fh))
+    plt.rcParams.update(LoadParamsC(fontsize=fontsize))
+    plt.suptitle('T = {:.2f} s'.format(T))  # WATCH OUT: formatting
+    plt.subplot(1, 2, 1)
+    plt.title('phase [rad]')
+    plt.plot(np.min(xs), np.min(ys), 'w.'); plt.plot(np.max(xs), np.max(ys), 'w.')
+    sct = plt.scatter(xs, ys, marker='o', c=phases, edgecolor='none', s=size, vmin=-np.pi, vmax=np.pi, cmap='jet')
+    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    plt.subplot(1, 2, 2)
+    plt.title('amplitude [-]')
+    plt.plot(np.min(xs), np.min(ys), 'w.'); plt.plot(np.max(xs), np.max(ys), 'w.')
+    sct = plt.scatter(xs, ys, marker='o', c=amplitudes, edgecolor='none', vmin=0, vmax=0.10, s=size, cmap='jet')  # IMP*: from 0 to 0.10
+    plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal')
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(pathImg), exist_ok=True)
+    plt.savefig(pathImg, dpi=dpi)
+    plt.close()
+    return None
+def GHBathyPlotWavenumbers(pathImg, xsM, ysM, T, phasesM, xsK, ysK, RKs, ztsK, ks, gammas, stdGs, max_depth, fw, fh, fontsize, dpi=100):  # lm:2025-07-05; lr:2025-07-14
+    fw, fh = GHFwFh2FwFh(fw, fh, xsK, ysK)  # IMP*: mesh_K
+    plt.figure(figsize=(3*fw, len(RKs)*fh))
+    fontsize = min(fontsize + 2 * (len(RKs) - 2), 2 * fontsize)  # WATCH OUT: epsilon
+    sizeM = EstimateScatterSize_2506(xsM, ysM, fw, fh, dpi)  # mesh_M
+    sizeK = EstimateScatterSize_2506(xsK, ysK, fw, fh, dpi)  # mesh_K
+    plt.rcParams.update(LoadParamsC(fontsize=fontsize))
+    plt.suptitle('T = {:.2f} s'.format(T))
+    for posRK in range(len(RKs)):
+        try:
+            plt.subplot(len(RKs), 3, 3*posRK+1)
+            plt.title('phase [rad]')
+            plt.plot(np.min(xsK), np.min(ysK), 'w.'); plt.plot(np.max(xsK), np.max(ysK), 'w.')
+            sct = plt.scatter(xsM, ysM, marker='o', c=phasesM, vmin=-np.pi, vmax=np.pi, edgecolor='none', s=sizeM, cmap='jet')
+            possTMP = np.where(np.hypot(xsM - np.mean(xsM), ysM - np.mean(ysM)) <= RKs[posRK])[0]
+            plt.plot(xsM[possTMP], ysM[possTMP], 'wo', markersize=sizeM/2)  # WATCH OUT: epsilon, formatting
+            plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)])
+            plt.subplot(len(RKs), 3, 3*posRK+2)
+            plt.title(r'$z_b$ [m]')
+            plt.plot(np.min(xsK), np.min(ysK), 'w.'); plt.plot(np.max(xsK), np.max(ysK), 'w.')
+            zbs = np.mean(ztsK) - np.arctanh(np.clip(gammas[:, posRK], 0, 1-1.e-6)) / ks[:, posRK]  # gammas and ks have np.nan
+            sct = plt.scatter(xsK, ysK, marker='o', c=zbs, vmin=-max_depth, vmax=0, edgecolor='none', s=sizeK, cmap='gist_earth')  # WATCH OUT: vmax, formatting
+            plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)])
+            plt.subplot(len(RKs), 3, 3*posRK+3)
+            plt.title(r'$\sigma_\gamma$ [-]')
+            plt.plot(np.min(xsK), np.min(ysK), 'w.'); plt.plot(np.max(xsK), np.max(ysK), 'w.')
+            sct = plt.scatter(xsK, ysK, marker='o', c=stdGs[:, posRK], vmin=0, vmax=0.2, edgecolor='none', s=sizeK, cmap='CMRmap_r')  # WATCH OUT: from 0 to 0.2, formatting
+            plt.colorbar(sct); plt.xlabel(r'$x$ [m]'); plt.ylabel(r'$y$ [m]'); plt.axis('equal'); plt.xlim([np.min(xsK), np.max(xsK)])
+        except Exception:  # WATCH OUT
+            continue
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(pathImg), exist_ok=True)
+    plt.savefig(pathImg, dpi=dpi)
+    plt.close()
+    return None
+def GHExtractVideo(pathVid, pathFldFrames, fps=0., round=True, stamp='millisecond', extImg='png', overwrite=False):  # 2010-01-01; lm:2025-06-26; lr:2025-07-11
+    if os.path.exists(pathFldFrames):
+        if overwrite:
+            CleanAFld_2504(pathFldFrames)
+        else:
+            return None
+    pathFldVid, fnVid = os.path.split(pathVid)
+    fpsVid, nOfFramesVid = PathVid2FPS(pathVid), PathVid2NOfFrames(pathVid)
+    lenVid = (nOfFramesVid - 1) / fpsVid
+    fps = RecomputeFPS_2502(fps, fpsVid, round=round)
+    isFpsTheSame = np.isclose(fps, fpsVid, rtol=1.e-6)
+    if not isFpsTheSame:
+        nOfFramesApp = lenVid * fps + 1  # ~ approximation of the number of frames of the new video
+        if nOfFramesApp <= 3:  # WATCH OUT: epsilon
+            raise Exception("Invalid input: requested fps is too low for video '{}'; please specify fps > {:.4f}".format(fnVid, 4 / lenVid))  # WATCH OUT: formatting, epsilon
+    fnVidTMP = '000_{}{}'.format(''.join(random.choices(string.ascii_letters, k=20)), os.path.splitext(fnVid)[1])
+    pathVidTMP = os.path.join(pathFldVid, fnVidTMP)
+    if os.path.exists(pathVidTMP):  # miracle
+        os.remove(pathVidTMP)
+    if not isFpsTheSame:
+        shutil.move(pathVid, pathVidTMP)  # pathVidTMP is a backup of the original
+        Vid2VidModified_2504(pathVidTMP, pathVid, fps=fps, round=round)  # IMP*: this pathVid has the desired fps
+    PathVid2AllFrames_2506(pathVid, pathFldFrames, stamp=stamp, extImg=extImg)
+    if not isFpsTheSame:
+        shutil.move(pathVidTMP, pathVid)  # pathVid is the original
+    return None
+def GHFwFh2FwFh(fw, fh, xs, ys):  # lm:2025-07-05; lr:2025-07-11
+    dx, dy = np.max(xs) - np.min(xs), np.max(ys) - np.min(ys)
+    fh = max(fh, dy / (dx + 1.e-12) * fw)  # WATCH OUT: epsilon
+    fw = dx / (dy + 1.e-12) * fh  # WATCH OUT: epsilon
+    return fw, fh
+def GHInform_2506(UCode, pathFldMain, par, pos, margin=0, sB='*', nFill=10):  # lm:2025-06-19; lr:2025-07-14
+    text0 = 'session started for'
+    text1 = 'session finished successfully for' 
+    textC = os.sep.join(pathFldMain.split(os.sep)[-2:])  # WATCH OUT: [-2:] formatting
+    if len(text1) > len(text0):
+        l0, l1 = len(text1) - len(text0), 0
+    else:
+        l0, l1 = 0, len(text0) - len(text1)
+    if pos == 0:
+        msg = '{} {} /{}'.format(UCode, text0, textC)
+        print("\n{:s}\n".format(msg.center(len(msg)+nFill+l0, '_')))
+        print("Parameters:")
+        PrintDictionary_2506(par, margin=margin, sB=sB)
+    else:
+        msg = '{} {} /{}'.format(UCode, text1, textC)
+        print("\n{:s}\n".format(msg.center(len(msg)+nFill+l1, '_')))
+    return None
+def GHLoadDGit():  # lm:2025-06-30; lr:2025-07-13
+    dGit = {}
+    dGit |= {'ind': 2}
+    dGit |= {'sOK': '\033[40;92m\u25CF\033[0m'}  # '\033[92m\u25CF\033[0m' '\U0001F7E2' '\033[92m✔\033[0m'
+    dGit |= {'sWO': '\033[40;93m\u25CF\033[0m'}  # '\033[93m\u25CF\033[0m' '\U0001F7E0'
+    dGit |= {'sKO': '\033[40;91m\u25CF\033[0m'}  # '\033[91m\u25CF\033[0m' '\U0001F534' '\033[31m✘\033[0m'
+    dGit |= {'sB1': '\u2022'}  # bullet
+    dGit |= {'sB2': '\u2023'}  # triangular bullet
+    dGit |= {'sB3': '\u25E6'}  # white bullet
+    dGit |= {'sB4': '\u2043'}  # hyphen bullet
+    dGit |= {'sB5': '\u2219'}  # bullet operator
+    dGit |= {'sB6': '\u25AA'}  # small black square
+    dGit |= {'sB7': '\u25AB'}  # small white square
+    dGit |= {'sB8': '\u25CF'}  # black circle
+    dGit |= {'sB9': '\u25CB'}  # white circle
+    dGit |= {'fontsize': 20}
+    dGit |= {'fs': 8}  # figure size for scatter plot
+    dGit |= {'fw': 10}  # figure width
+    dGit |= {'fh': 4}  # figure height
+    dGit |= {'dpiLQ': 100}
+    dGit |= {'dpiHQ': 200}
+    return dGit
+def GHLoadPar(pathFldMain):  # lm:2025-07-08; lr:2025-07-14
+    pathJson = os.path.join(pathFldMain, 'data', 'parameters.json')  # IMP*: nomenclature
+    try:
+        with open(pathJson, 'r') as f:
+            par = json.load(f)
+    except Exception as eTMP:
+        raise Exception("Invalid input: failed to read '{}': {}".format(pathJson, eTMP))
+    return par
+def GHLookFor0Or1PathVideoOrFail(pathFld, extsVids=['mp4', 'avi', 'mov']):  # 2010-01-01; lm:2025-06-15; lr:2025-07-14
+    pathsVids = [item.path for item in os.scandir(pathFld) if item.is_file() and os.path.splitext(item.name)[1][1:].lower() in extsVids]
+    if len(pathsVids) == 0:
+        pathVid = ''
+    elif len(pathsVids) == 1:
+        pathVid = pathsVids[0]
+    else:
+        raise Exception("Unexpected condition: more than one video found at '{}'".format(pathFld))
+    return pathVid
+def GetWPhaseFitting_2506(ts, fs, Rt):  # lm:2025-07-14; lr:2025-07-14
+    if not np.min(np.diff(ts)) > 0:
+        raise Exception("Invalid input: 'ts' must be strictly increasing")
+    Rt_max = (np.max(ts) - np.min(ts)) / 2.1
+    if Rt > Rt_max:
+        return -999., -999.
+    tsIn, wsIn = [[] for _ in range(2)]
+    for posT, t in enumerate(ts):
+        if not (np.min(ts)+Rt <= t <= np.max(ts)-Rt):  # we want the whole neighborhood within ts
+            continue
+        possA = np.where((ts >= t-Rt) & (ts <= t+Rt))[0]
+        A = np.ones((len(possA), 2))  # IMP*: initialize with ones
+        A[:, 1] = ts[possA] - ts[posT]  # sol[0] + sol[1] * t
+        b = np.angle(fs[possA] * np.conj(fs[posT]))  # IMP*: real value; np.angle(real_value) = 0
+        AT = np.transpose(A)
+        sol = np.linalg.solve(np.dot(AT, A), np.dot(AT, b))
+        tsIn.append(t); wsIn.append(np.abs(sol[1]))
+    tsIn, wsIn = map(np.asarray, [tsIn, wsIn])
+    w, wStd = np.mean(wsIn), np.std(wsIn)
+    if w <= 0:
+        return -999., -999.
+    return w, wStd
+def IntersectionOfTwoLines_2506(line0, line1, eps=1.e-14):  # 2000-01-01; lm:2025-06-11; lr:2025-06-30
+    den = ClipWithSign(line0['lx'] * line1['ly'] - line1['lx'] * line0['ly'], eps, np.inf)  # WATCH OUT; epsilon
+    xI = (line1['lt'] * line0['ly'] - line0['lt'] * line1['ly']) / den
+    yI = (line0['lt'] * line1['lx'] - line1['lt'] * line0['lx']) / den
+    return xI, yI
+def IsFlModified_2506(pathFl, t0=None, margin=datetime.timedelta(seconds=2)):  # 2000-01-01; lm:2025-06-26; lr:2025-07-13
+    if t0 is None:
+        t0 = datetime.datetime.now()    
+    tM = datetime.datetime.fromtimestamp(os.path.getmtime(pathFl))
+    tC = datetime.datetime.fromtimestamp(os.path.getctime(pathFl))
+    isFlModified = abs(tM - t0) <= margin or abs(tC - t0) <= margin
+    return isFlModified
+def IsFldModified_2506(pathFld, t0=None, margin=datetime.timedelta(seconds=2), recursive=False):  # 2000-01-01; lm:2025-06-26; lr:2025-07-13
+    if t0 is None:
+        t0 = datetime.datetime.now()    
+    isFldModified = False
+    if recursive:
+        for root, _, fns in os.walk(pathFld):
+            for fn in fns:
+                pathFl = os.path.join(root, fn)
+                if os.path.isfile(pathFl):
+                    if IsFlModified_2506(pathFl, t0=t0, margin=margin):
+                        return True
+    else:
+        for fn in os.listdir(pathFld):
+            pathFl = os.path.join(pathFld, fn)
+            if os.path.isfile(pathFl):
+                if IsFlModified_2506(pathFl, t0=t0, margin=margin):
+                    return True
+    return isFldModified
+def IsImg_2504(img):  # 2000-01-01; lm:2025-05-27; lr:2025-07-01
+    isImg = True
+    if not isinstance(img, np.ndarray):
+        return False
+    if not img.ndim >= 2:
+        return False
+    nr, nc = img.shape[:2]
+    if not (nr > 0 and nc > 0):
+        return False
+    if img.dtype.kind not in ('u', 'i') or img.min() < 0 or img.max() > 255:
+        return False
+    return isImg
+def Kappa2MuOneStep(kappa):  # 1900-01-01; lm:2025-05-27; lr:2025-07-02
+    kappa = np.clip(kappa, 1.e-14, np.inf)  # WATCH OUT; epsilon
+    mu = kappa / np.sqrt(np.tanh(kappa)) * (1. + kappa ** 1.09 * np.exp(-(1.56 + 1.28 * kappa + 0.219 * kappa ** 2 + 0.00371 * kappa ** 3)))  # error = 0.047%
+    return mu
+def LoadDMCSFromCalTxt_2502(pathCalTxt, rangeC, incHor=True, zr=0.):  # 2010-01-01; lm:2025-05-01; lr:2025-07-11
+    allVar, nc, nr = ReadCalTxt_2410(pathCalTxt, rangeC)[:3]
+    dMCS = AllVar2DMCS_2410(allVar, nc, nr, rangeC, incHor=incHor, zr=zr)
+    return dMCS
+def LoadParamsC(fontsize=24):  # lm:20205-06-24; lr:2025-06-24
+    paramsC = {'font.size': fontsize, 'axes.titlesize': fontsize, 'axes.labelsize': fontsize, 'xtick.labelsize': fontsize, 'ytick.labelsize': fontsize, 'legend.fontsize': fontsize, 'figure.titlesize': fontsize}
+    return paramsC
+def MatrixK_2410(dCaSVar, rangeC):  # 1900-01-01; lm:2025-05-01; lr:2025-06-21
+    if rangeC == 'close':  # K*
+        sca, sra = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sca', 'sra']]
+        K = np.asarray([[1/sca, 0, dCaSVar['oc']], [0, 1/sra, dCaSVar['or']], [0, 0, 1]])
+    elif rangeC == 'long':  # K
+        sc, sr = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sc', 'sr']]
+        K = np.asarray([[1/sc, 0, dCaSVar['oc']], [0, 1/sr, dCaSVar['or']], [0, 0, 1]])
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    if False:  # avoidable check for readability
+        assert np.isclose(K[0, 2], dCaSVar['oc']) and np.isclose(K[2, 0], 0)
+        assert np.isclose(K[1, 2], dCaSVar['or']) and np.isclose(K[2, 1], 0)
+    return K
+def MatrixR_2502(dAngVar):  # 1900-01-01; lr:2025-04-30; lr:2025-06-21
+    eu, ev, ef = UnitVectors_2502(dAngVar)
+    R = np.asarray([eu, ev, ef])
+    if False:  # avoidable check for readability
+        assert np.allclose(eu, R[0, :]) and np.allclose(ev, R[1, :]) and np.allclose(ef, R[2, :])
     return R
-def EulerianAngles2UnitVectors(ph, sg, ta): # 202109231415 (last read 2022-06-29)
-    ''' comments:
-    .- input ph, sg and ta are floats
-    .- output eu, ev and ef are 3-float-ndarrays which are orthonormal and positively oriented
-    '''
-    sph, cph = np.sin(ph), np.cos(ph)
-    ssg, csg = np.sin(sg), np.cos(sg)
-    sta, cta = np.sin(ta), np.cos(ta)
+def MatrixRt_2410(dExtVar, rangeC):  # 1900-01-01; lm:2025-04-30; lm:2025-06-21
+    if rangeC == 'close':
+        xH, yH, zH = [dExtVar[item] for item in ['xc', 'yc', 'zc']]
+    elif rangeC == 'long':
+        xH, yH, zH = [dExtVar[item] for item in ['x0', 'y0', 'z0']]
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    R = MatrixR_2502(dExtVar)  # dAngVar < dExtVar
+    t = -np.dot(R, np.asarray([xH, yH, zH]))  # the rows of R are eu, ev and ef
+    if False:  # avoidable check for readability
+        eu, ev, ef = UnitVectors_2502(dExtVar)
+        assert np.allclose(t, np.asarray([-xH*item[0]-yH*item[1]-zH*item[2] for item in [eu, ev, ef]]))
+    Rt = np.zeros((3, 4))
+    Rt[:, :3], Rt[:, 3] = R, t
+    if False:  # avoidable check for readability
+        assert Rt.shape == (3, 4) and np.allclose(Rt[:, :3], R) and np.allclose(Rt[:, 3], t)
+    return Rt
+def NForRANSAC(pOutlier, pDesired, nOfPoints, eps=1.e-12):  # 1900-01-01; lm:2025-05-28; lr:2025-06-23
+    num = np.log(np.clip(1 - pDesired, eps, 1-eps))
+    den = np.log(np.clip(1 - (1 - pOutlier) ** nOfPoints, eps, 1-eps))
+    N = int(np.ceil(num / den))
+    return N
+def OHorizon_2410():  # 2000-01-01; lm:2025-05-27; lr:2025-07-11
+    oHorizon = 5
+    return oHorizon
+def OpenVideoOrFail_2504(pathVid):  # 2000-01-01; lm:2025-05-28; lr:2025-07-14
+    vid = cv2.VideoCapture(pathVid)
+    if not vid.isOpened():
+        raise Exception("Invalid input: failed to read '{}'".format(pathVid))
+    return vid
+def PathImgOrImg2Img(img):  # 2000-01-01; lm:2025-05-27; lr:2025-07-01
+    if isinstance(img, str):
+        img = cv2.imread(img)  # WATCH OUT: can return None without raising an error
+    if not IsImg_2504(img):
+        raise Exception("Invalid input: invalid path or image")
+    return img
+def PathVid2AllFrames_2506(pathVid, pathFldFrames, stamp='millisecond', extImg='png'):  # 2010-01-01; lm:2025-06-11; lr:2025-06-30
+    pathFldFramesP = Path(pathFldFrames)
+    pathFldFramesP.mkdir(parents=True, exist_ok=True)
+    pattern = str(pathFldFramesP / f"frame_%06d.{extImg}")
+    cmd = ["ffmpeg", "-i", pathVid, "-vsync", "0", pattern]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    fnVidWE = os.path.splitext(os.path.split(pathVid)[1])[0]
+    if stamp == 'millisecond':
+        fpsVid = PathVid2FPS(pathVid)
+    fns = sorted([item for item in os.listdir(pathFldFrames)])  # IMP*; sorted
+    for posFn, fn in enumerate(fns):
+        if stamp == 'millisecond':
+            millisecond = int(posFn * 1000 / fpsVid)  # WATCH OUT; IMP*; int()
+            fnNew = '{:}_{:}.{:}'.format(fnVidWE, str(millisecond).zfill(12), extImg)  # IMP*; nomenclature
+        elif stamp == 'counter':  # counter
+            fnNew = '{:}_{:}.{:}'.format(fnVidWE, str(posFn).zfill(12), extImg)  # IMP*; nomenclature
+        else:
+            raise Exception("Invalid input: 'stamp' must be 'millisecond' or 'counter'")
+        os.rename(os.path.join(pathFldFrames, fn), os.path.join(pathFldFrames, fnNew))
+    return None
+def PathVid2FPS(pathVid):  # 2000-01-01; lm:2025-05-28; lr:2025-07-14
+    vid = OpenVideoOrFail_2504(pathVid)
+    fps = vid.get(cv2.CAP_PROP_FPS)
+    vid.release()
+    return fps
+def PathVid2NOfFrames(pathVid):  # 2000-01-01; lm:2025-05-28; lr:2025-07-14
+    vid = OpenVideoOrFail_2504(pathVid)
+    nOfFrames = int(np.round(vid.get(cv2.CAP_PROP_FRAME_COUNT)))
+    vid.release()
+    return nOfFrames
+def PathVid2NcNr(pathVid):  # 2000-01-01; lm:2025-05-28; lr:2025-07-09
+    vid = OpenVideoOrFail_2504(pathVid)
+    nc = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
+    nr = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    vid.release()
+    return nc, nr
+def Polyline2InnerHexagonalMesh_2506(polyline, d, eps_xs=1.e-9):  # 1900-01-01; lm:2025-06-12; lr:2025-07-01
+    xsC, ysC = CloudOfPoints2Rectangle_2504(polyline['xs'], polyline['ys'], margin=2.1*d)[:2]
+    v1, v2 = [np.asarray([xsC[pos+1] - xsC[pos], ysC[pos+1] - ysC[pos]]) for pos in [0, 1]]
+    l1, l2 = [np.sqrt(np.sum(item ** 2)) for item in [v1, v2]]
+    u1, u2 = v1 / l1, v2 / l2
+    j1, j2 = d, 2 * d * np.cos(np.pi / 6)  # WATCH OUT; 2 * d * cos(30); jump between same-indented rows
+    n1, n2 = int(l1 / j1 + 1), int(l2 / j2 + 1)
+    xsM, ysM = [[] for _ in range(2)]
+    for indented in [False, True]:
+        x0 = xsC[0]
+        y0 = ysC[0]
+        if indented:
+            x0 += j1 / 2 * u1[0] + j2 / 2 * u2[0]  # [0] -> x
+            y0 += j1 / 2 * u1[1] + j2 / 2 * u2[1]  # [1] -> y
+        for iN1, iN2 in itertools.product(range(n1), range(n2)):
+            xsM.append(x0 + iN1 * j1 * u1[0] + iN2 * j2 * u2[0])
+            ysM.append(y0 + iN1 * j1 * u1[1] + iN2 * j2 * u2[1])
+    xsM, ysM = map(np.asarray, [xsM, ysM])
+    possI = CloudOfPoints2PossInsidePolyline_2508(xsM, ysM, polyline, eps_xy=eps_xs)
+    xsM, ysM = [item[possI] for item in [xsM, ysM]]
+    return xsM, ysM
+def Poss0AndPoss1InFind2DTransform_2504(n): # 1900-01-01; lm:2025-05-28; lr:2025-06-27
+    aux = np.arange(n)  # array([], dtype=int64) if n == 0
+    poss0 = 2 * aux + 0
+    poss1 = 2 * aux + 1
+    return poss0, poss1
+def PrintDictionary_2506(theDictionary, margin=0, sB='*'):  # 2020-01-01; lm:2025-06-19; lr:2025-07-09
+    if not theDictionary:
+        print("{:{}}{} <empty dictionary>".format('', margin, sB))
+        return None
+    lMax = max(max(len(str(item)) for item in theDictionary) + 5, 30)  # WATCH OUT; epsilon
+    for key in theDictionary:
+        print("{:{}}{} __{:_<{}} {}".format('', margin, sB, key, lMax, theDictionary[key]))
+    return None
+def RANSACPlane(xs, ys, zs, errorC, pDesired=1-1.e-9, margin=0.5, max_nForRANSAC=np.inf):  # lm:2025-06-17; lm:2025-07-02
+    minNOfPoints = 3
+    if not (len(xs) == len(ys) == len(zs) >= minNOfPoints):
+        raise Exception("Invalid input: 'xs', 'ys', and 'zs' must be arrays of the same length >= {}".format(minNOfPoints))
+    A, b = np.column_stack((xs, ys, np.ones(len(xs)))), zs
+    iForRANSAC, nForRANSAC, possG = 0, np.inf, []
+    while iForRANSAC < nForRANSAC:
+        possH = np.random.choice(range(len(xs)), size=3, replace=False)
+        AH, bH = A[possH, :], b[possH]
+        try:
+            AHT = np.transpose(AH)
+            sol = np.linalg.solve(np.dot(AHT, AH), np.dot(AHT, bH))
+            errors = np.abs(np.dot(A, sol) - b)
+        except Exception:
+            continue
+        possGH = np.where(errors <= errorC)[0]
+        if len(possGH) > len(possG):
+            possG = possGH
+            pOutlier = 1 - len(possG) / len(xs) + margin * len(possG) / len(xs)  # margin in [0, 1), the higher the safer
+            nForRANSAC = min(max_nForRANSAC, NForRANSAC(pOutlier, pDesired, minNOfPoints))
+        if len(possG) == len(xs):
+            break
+        iForRANSAC += 1
+    A, b = A[possG, :], b[possG]
+    AT = np.transpose(A)
+    px, py, pl = np.linalg.solve(np.dot(AT, A), np.dot(AT, b))
+    return px, py, pl, possG
+def REarth_2410():  # 2000-01-01; lm:2025-05-27; lr:2025-07-11
+    rEarth = 6.371e+6
+    return rEarth
+def RMSE1D_2506(xs, xsR):  # lm:2025-06-18; lr:2025-07-13
+    rmse = np.sqrt(np.mean((xs - xsR) ** 2))
+    return rmse
+def ReadCalTxt_2410(pathCalTxt, rangeC):  # 1900-01-01; lm:2025-05-01; lr:2025-07-14
+    data = np.loadtxt(pathCalTxt, usecols=0, dtype=float, ndmin=1)
+    if rangeC == 'close':
+        lenAllVar = 14
+    elif rangeC == 'long':
+        lenAllVar = 8
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    if len(data) < lenAllVar+3:
+        raise Exception("Invalid input: unable to read file at '{}'".format(pathCalTxt))
+    allVar, nc, nr, errorT = data[:lenAllVar], int(np.round(data[lenAllVar])), int(np.round(data[lenAllVar+1])), data[lenAllVar+2]
+    return allVar, nc, nr, errorT
+def RecomputeFPS_2502(fpsGoal, fpsAvailable, round=True):  # 1900-01-01; lm:2025-06-06; lr:2025-07-11
+    if not (0 < fpsGoal < fpsAvailable):
+        fps = fpsAvailable
+    else:
+        factor = fpsAvailable / fpsGoal  # IMP*; >1
+        if round:
+            factor = int(np.round(factor))
+        else:
+            factor = int(factor)
+        if True:  # avoidable check for readability
+            assert isinstance(factor, int) and factor >= 1
+        fps = fpsAvailable / factor  # float, but so that fpsAvailable / fps = factor = integer
+    if True:  # avoidable check for readability
+        assert 0 < fps <= fpsAvailable
+    return fps
+def TH2LOneStep(T, h, g):  # 2010-01-01; lm:2025-05-27; lr:2025-07-02
+    w = 2 * np.pi / T
+    kappa = w ** 2 * h / g
+    mu = Kappa2MuOneStep(kappa)
+    k = mu / h
+    L = 2 * np.pi / k
+    return L
+def UDaVDa2UUaVUaAux_2410(uDas, vDas, uUas, vUas, dDtrVar, rangeC):  # 1900-01-01; lm:2025-05-01; lr:2025-07-01
+    uDasN, vDasN = UUaVUa2UDaVDa_2410(uUas, vUas, dDtrVar, rangeC)[:2]  # WATCH OUT: all positions; distorted from the current undistorted
+    uerrors, verrors = uDas - uDasN, vDas - vDasN  # IMP*: direction
+    errors = np.hypot(uerrors, verrors)
+    aux1s = uUas ** 2 + vUas ** 2
+    aux1suUa = 2 * uUas
+    aux1svUa = 2 * vUas
+    aux2s = 1 + dDtrVar['k1a'] * aux1s + dDtrVar['k2a'] * aux1s ** 2
+    aux2suUa = dDtrVar['k1a'] * aux1suUa + dDtrVar['k2a'] * 2 * aux1s * aux1suUa
+    aux2svUa = dDtrVar['k1a'] * aux1svUa + dDtrVar['k2a'] * 2 * aux1s * aux1svUa
+    aux3suUa = 2 * vUas
+    aux3svUa = 2 * uUas
+    aux4suUa = aux1suUa + 4 * uUas
+    aux4svUa = aux1svUa
+    aux5suUa = aux1suUa
+    aux5svUa = aux1svUa + 4 * vUas
+    JuUauUas = aux2s + uUas * aux2suUa + dDtrVar['p2a'] * aux4suUa + dDtrVar['p1a'] * aux3suUa
+    JuUavUas = uUas * aux2svUa + dDtrVar['p2a'] * aux4svUa + dDtrVar['p1a'] * aux3svUa
+    JvUauUas = vUas * aux2suUa + dDtrVar['p1a'] * aux5suUa + dDtrVar['p2a'] * aux3suUa
+    JvUavUas = aux2s + vUas * aux2svUa + dDtrVar['p1a'] * aux5svUa + dDtrVar['p2a'] * aux3svUa
+    dens = JuUauUas * JvUavUas - JuUavUas * JvUauUas
+    dens = ClipWithSign(dens, 1.e-14, np.inf)  # WATCH OUT: epsilon
+    duUas = (+JvUavUas * uerrors - JuUavUas * verrors) / dens
+    dvUas = (-JvUauUas * uerrors + JuUauUas * verrors) / dens
+    return duUas, dvUas, errors
+def UDaVDa2UUaVUaParabolicDistortion_2410(uDas, vDas, k1a, rtrnPossG=False):  # undistort; Cardano; 1900-01-01; lm:2025-05-01; lr:2025-07-01
+    xiDs = k1a * (uDas ** 2 + vDas ** 2)
+    xiUs, possG = XiD2XiUCubicEquation_2410(xiDs, rtrnPossG=rtrnPossG)
+    uUas, vUas = [item / (1 + xiUs) for item in [uDas, vDas]]
+    return uUas, vUas, possG
+def UDaVDa2UUaVUa_2410(uDas, vDas, dDtrVar, rangeC, rtrnPossG=False):  # undistort; potentially expensive; 1900-01-01; lm:2025-05-01; lm:2025-07-01
+    if rangeC == 'long':
+        if rtrnPossG:
+            possG = np.arange(len(uDas))
+        else:
+            possG = np.asarray([], dtype=int)
+        return uDas, vDas, possG
+    elif rangeC == 'close':
+        if len(uDas) == 0 or len(vDas) == 0:
+            return np.full(uDas.shape, np.nan), np.full(uDas.shape, np.nan), np.asarray([], dtype=int)  # WATCH OUT
+        uUas, vUas, possG = UDaVDa2UUaVUaParabolicDistortion_2410(uDas, vDas, dDtrVar['k1a'], rtrnPossG=rtrnPossG)
+        if np.allclose([dDtrVar['k2a'], dDtrVar['p1a'], dDtrVar['p2a']], 0, atol=1.e-9):  # WATCH OUT: epsilon
+            return uUas, vUas, possG
+        errors, hasConverged, counter = 1.e+6 * np.ones(uDas.shape), False, 0
+        while not hasConverged and counter <= 50:
+            duUas, dvUas, errorsN = UDaVDa2UUaVUaAux_2410(uDas, vDas, uUas, vUas, dDtrVar, rangeC)
+            possB = np.where(np.isnan(errorsN) | (errorsN > 4 * errors))[0]  # WATCH OUT: some points do not converge; epsilon
+            if len(possB) == len(uDas):  # not hasConverged
+                break
+            uUas, vUas, errors, hasConverged, counter = uUas + duUas, vUas + dvUas, errorsN, np.nanmax(errorsN) < 1.e-9, counter + 1  # WATCH OUT: epsilon
+            uUas[possB], vUas[possB] = np.nan, np.nan  # IMP*
+        if not hasConverged:
+            return np.full(uDas.shape, np.nan), np.full(uDas.shape, np.nan), np.asarray([], dtype=int)  # WATCH OUT
+        if rtrnPossG:  # WATCH OUT: necessarily different than for parabolic: now it includes something like the solution xiU < -4/3; handles np.nan
+            uDasR, vDasR = UUaVUa2UDaVDa_2410(uUas, vUas, dDtrVar, rangeC)[:2]  # WATCH OUT: all positions
+            possG = np.where(np.hypot(uDasR - uDas, vDasR - vDas) < 1.e-9)[0]  # WATCH OUT: epsilon; this is also a check
+        else:
+            possG = np.asarray([], dtype=int)
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return uUas, vUas, possG
+def UUaVUa2UDaVDaParabolicDistortion_2410(uUas, vUas, k1a, rtrnPossG=False):  # distort; 1900-01-01; lm:2025-05-01; lm:2025-07-01
+    xiUs = k1a * (uUas ** 2 + vUas ** 2)
+    uDas, vDas = [item * (1 + xiUs) for item in [uUas, vUas]]
+    xiDs, possG = XiU2XiDCubicEquation_2410(xiUs, rtrnPossG=rtrnPossG)
+    if False:  # avoidable check for readability
+        assert np.allclose(xiDs, k1a * (uDas ** 2 + vDas ** 2))
+    return uDas, vDas, possG
+def UUaVUa2UDaVDa_2410(uUas, vUas, dDtrVar, rangeC, rtrnPossG=False):  # distort; 1900-01-01; lm:2025-05-01; lr:2025-07-01
+    if rangeC == 'long':
+        if rtrnPossG:
+            possG = np.arange(len(uUas))
+        else:
+            possG = np.asarray([], dtype=int)
+        return uUas, vUas, possG
+    elif rangeC == 'close':
+        if np.allclose([dDtrVar['k2a'], dDtrVar['p1a'], dDtrVar['p2a']], 0, atol=1.e-9):  # WATCH OUT: epsilon
+            uDas, vDas, possG = UUaVUa2UDaVDaParabolicDistortion_2410(uUas, vUas, dDtrVar['k1a'], rtrnPossG=rtrnPossG)
+            return uDas, vDas, possG
+        aux1s = uUas ** 2 + vUas ** 2  # = dUas**2 = d_{U*}**2
+        aux2s = 1 + dDtrVar['k1a'] * aux1s + dDtrVar['k2a'] * aux1s ** 2
+        aux3s = 2 * uUas * vUas
+        aux4s = aux1s + 2 * uUas ** 2
+        aux5s = aux1s + 2 * vUas ** 2
+        uDas = uUas * aux2s + dDtrVar['p2a'] * aux4s + dDtrVar['p1a'] * aux3s
+        vDas = vUas * aux2s + dDtrVar['p1a'] * aux5s + dDtrVar['p2a'] * aux3s
+        if rtrnPossG:  # WATCH OUT: necessarily different than for parabolic: now it includes something like the solution xiU < -4/3
+            uUasR, vUasR = UDaVDa2UUaVUa_2410(uDas, vDas, dDtrVar, rangeC)[:2]  # WATCH OUT: all positions
+            possG = np.where(np.hypot(uUasR - uUas, vUasR - vUas) < 1.e-6)[0]  # WATCH OUT: epsilon
+        else:
+            possG = np.asarray([], dtype=int)
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return uDas, vDas, possG
+def UaVa2CR_2410(uas, vas, dCaSVar, rangeC):  # 1900-01-01; lm:2025-04-30; lr:2025-06-30
+    if rangeC == 'close':
+        sca, sra = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sca', 'sra']]  # WATCH OUT: epsilon
+        cs = uas / sca + dCaSVar['oc']
+        rs = vas / sra + dCaSVar['or']
+    elif rangeC == 'long':
+        sc, sr = [ClipWithSign(dCaSVar[item], 1.e-14, np.inf) for item in ['sc', 'sr']]  # WATCH OUT: epsilon
+        cs = uas / sc + dCaSVar['oc']  # uas are actually us in this case
+        rs = vas / sr + dCaSVar['or']  # vas are actually vs in this case
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    return cs, rs
+def UnitVectors_2502(dAngVar):  # 1900-01-01; lm:2025-04-30; lr:2025-06-23
+    sph, cph = np.sin(dAngVar['ph']), np.cos(dAngVar['ph'])
+    ssg, csg = np.sin(dAngVar['sg']), np.cos(dAngVar['sg'])
+    sta, cta = np.sin(dAngVar['ta']), np.cos(dAngVar['ta'])
     eux = +csg * cph - ssg * sph * cta
     euy = -csg * sph - ssg * cph * cta
     euz = -ssg * sta
@@ -410,625 +988,184 @@ def EulerianAngles2UnitVectors(ph, sg, ta): # 202109231415 (last read 2022-06-29
     efy = +cph * sta
     efz = -cta
     ef = np.asarray([efx, efy, efz])
+    if False:  # avoidable check for readability
+        R = np.asarray([eu, ev, ef])
+        assert np.allclose(np.dot(R, np.transpose(R)), np.eye(3)) and np.isclose(np.linalg.det(R), 1)
     return eu, ev, ef
-def FindAffineA01(xs0, ys0, xs1, ys1): # 202111241134 (last read 2022-11-10)
-    ''' comments:
-    .- input xs0, ys0, xs1 and ys1 are float-ndarrays of the same length (>= 3)
-    .- output A01 is a 6-float-ndarray or None (if it does not succeed)
-    '''
-    assert len(xs0) == len(ys0) == len(xs1) == len(ys1) >= 3
-    A, b = np.zeros((2 * len(xs0), 6)), np.zeros(2 * len(xs0))
-    poss0, poss1 = Poss0AndPoss1InFind2DTransform(len(xs0))
-    A[poss0, 0], A[poss0, 1], A[poss0, 2], b[poss0] = xs0, ys0, np.ones(xs0.shape), xs1
-    A[poss1, 3], A[poss1, 4], A[poss1, 5], b[poss1] = xs0, ys0, np.ones(xs0.shape), ys1
-    try:
-        A01 = np.linalg.solve(np.dot(np.transpose(A), A), np.dot(np.transpose(A), b))
-    except: # aligned points
-        A01 = None
-    return A01
-def GetWPhaseFitting(ts, fs, Rt, options={}): # 202105281430 (last read 2022-07-10)
-    ''' comments:
-    .- input ts is a float-ndarray
-    .- input fs is a complex-ndarray (time component of the EOF/PCA mode)
-    .- input Rt is a float
-    .- output w and wStd are floats (-999. if it does not succed)
-    '''
-    keys, defaultValues = ['pathFigureOut'], [None]
-    options = CompleteADictionary(options, keys, defaultValues)
-    assert np.min(np.diff(ts)) > 0
-    tsIn, wsIn = [np.asarray([]) for item in range(2)]
-    for posT, t in enumerate(ts):
-        if not (np.min(ts)+Rt <= ts[posT] <= np.max(ts)-Rt): # we want the whole neighborhood within ts
-            continue
-        possA = [posA for posA in range(len(ts)) if ts[posT]-Rt <= ts[posA] <= ts[posT]+Rt]
-        A = np.ones((len(possA), 2)); A[:, 1] = ts[possA] - ts[posT]
-        b = np.angle(fs[possA] * np.conj(fs[posT]))
-        sol = np.linalg.solve(np.dot(np.transpose(A), A), np.dot(np.transpose(A), b))
-        tsIn, wsIn = np.append(tsIn, ts[posT]), np.append(wsIn, np.abs(sol[1]))
-    w, wStd = np.mean(wsIn), np.std(wsIn)
-    if w <= 0.:
-        w, wStd = -999., -999.
-    if options['pathFigureOut'] is not None:
-        plt.subplot(1, 2, 1)
-        plt.plot(ts, np.angle(fs), 'k+')
-        plt.subplot(1, 2, 2)
-        if w > 0:
-            plt.plot(tsIn, wsIn, 'k+')
-            plt.plot(tsIn, w * np.ones(len(tsIn)), 'b-')
-        plt.savefig(options['pathFigureOut'], dpi=200)
-        plt.close('all')
-    return w, wStd
-def IntersectionOfTwoLines(line0, line1, options={}): # 202205260841 (last read 2022-07-02)
-    ''' comments:
-    .- input line0 and line1 are dictionaries (including at least 'lx', 'ly', 'lt')
-    .- output xI and yI are floats or None (if the lines are parallel)
-        .- output xI and yI is the point closest to the origin if the lines are coincident
-    .- output case is a string ('point', 'coincident' or 'parallel')
-    '''
-    keys, defaultValues = ['epsilon'], [1.e-11]
-    options = CompleteADictionary(options, keys, defaultValues)
-    line0, line1 = [NormalizeALine(item) for item in [line0, line1]]
-    detT = + line0['lx'] * line1['ly'] - line0['ly'] * line1['lx']
-    detX = - line0['lt'] * line1['ly'] + line0['ly'] * line1['lt']
-    detY = - line0['lx'] * line1['lt'] + line0['lt'] * line1['lx']
-    if np.abs(detT) > options['epsilon']: # point
-        xI, yI, case = detX / detT, detY / detT, 'point'
-    elif max([np.abs(detX), np.abs(detY)]) < options['epsilon']: # coincident
-        (xI, yI), case = PointInALineClosestToAPoint(line0, 0., 0.), 'coincident'
-    else: # parallel
-        xI, yI, case = None, None, 'parallel'
-    return xI, yI, case
-def Kappa2MuOneStep(kappa): # 202207091901 (last read 2022-07-09)
-    ''' comments:
-    .- input kappa is a float or a float-ndarray (kappa = w**2*h/g)
-    .- ouput mu is a float or a float-ndarray (mu = k*h)
-    '''
-    kappa = np.clip(kappa, 1.e-12, 1.e+12)
-    mu = kappa / np.sqrt(np.tanh(kappa)) * (1. + kappa ** 1.21272008 * np.exp(-1.32530358 + (-1.5943765 -0.14628616 * kappa) * kappa))
-    return mu
-def MainSet2HorizonLine(mainSet): # 202109141400 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'nc', 'nr, 'zc', 'radiusOfEarth', 'ef', 'xc', 'efx', 'yc', 'efy', 'Pa', 'orderOfHorizonPoly')
-    .- output horizonLine is a dictionary
-    '''
-    z0 = 0.
-    horizonLine = {key:mainSet[key] for key in ['nc', 'nr']}
-    bp = np.sqrt(2. * max([1.e-2, mainSet['zc'] - z0]) * mainSet['radiusOfEarth']) / np.sqrt(np.sum(mainSet['ef'][0:2] ** 2))
-    px, py, pz, vx, vy, vz = mainSet['xc'] + bp * mainSet['efx'], mainSet['yc'] + bp * mainSet['efy'], -max([1.e-2, mainSet['zc']-2.*z0]), -mainSet['efy'], +mainSet['efx'], 0.
-    dc, cc = np.sum(mainSet['Pa'][0, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][0, 0:3] * np.asarray([px, py, pz])) + mainSet['Pa'][0, 3]
-    dr, cr = np.sum(mainSet['Pa'][1, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][1, 0:3] * np.asarray([px, py, pz])) + mainSet['Pa'][1, 3]
-    dd, cd = np.sum(mainSet['Pa'][2, 0:3] * np.asarray([vx, vy, vz])), np.sum(mainSet['Pa'][2, 0:3] * np.asarray([px, py, pz])) + 1.
-    ccUh1, crUh1, ccUh0 = dr * cd - dd * cr, dd * cc - dc * cd, dc * cr - dr * cc
-    TMP = max([np.sqrt(ccUh1 ** 2 + crUh1 ** 2), 1.e-8])
-    horizonLine['ccUh1'], horizonLine['crUh1'], horizonLine['ccUh0'] = [item / TMP for item in [ccUh1, crUh1, ccUh0]]
-    horizonLine['crUh1'] = ClipWithSign(horizonLine['crUh1'], 1.e-8, 1.e+8)
-    cUhs = np.linspace(-0.1 * mainSet['nc'], +1.1 * mainSet['nc'], 31, endpoint=True)
-    rUhs = CUh2RUh(horizonLine, cUhs)
-    cDhs, rDhs = CURU2CDRD(mainSet, cUhs, rUhs) # explicit
-    A = np.ones((len(cDhs), mainSet['orderOfHorizonPoly'] + 1))
-    for n in range(1, mainSet['orderOfHorizonPoly'] + 1):
-        A[:, n] = cDhs ** n
-    b = rDhs
-    try:
-        horizonLine['ccDh'] = np.linalg.solve(np.dot(np.transpose(A), A), np.dot(np.transpose(A), b))
-        if np.max(np.abs(b - np.dot(A, horizonLine['ccDh']))) > 5e-1: # IMP* WATCH OUT
-            horizonLine['ccDh'] = np.zeros(mainSet['orderOfHorizonPoly'] + 1)
-            horizonLine['ccDh'][0] = 1.e+2 # IMP* WATCH OUT
-    except:
-        horizonLine['ccDh'] = np.zeros(mainSet['orderOfHorizonPoly'] + 1)
-        horizonLine['ccDh'][0] = 1.e+2 # IMP* WATCH OUT
-    return horizonLine
-def MainSet2Pa(mainSet): # 202207061434 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'pc', 'eu', 'ev', 'ef', 'sca', 'sra', 'oc' and 'or'
-    '''
-    tu, tv, tf = [-np.sum(mainSet['pc'] * mainSet[item]) for item in ['eu', 'ev', 'ef']]
-    P = np.zeros((3, 4))
-    P[0, 0:3], P[0, 3] = mainSet['eu'] / mainSet['sca'] + mainSet['oc'] * mainSet['ef'], tu / mainSet['sca'] + mainSet['oc'] * tf
-    P[1, 0:3], P[1, 3] = mainSet['ev'] / mainSet['sra'] + mainSet['or'] * mainSet['ef'], tv / mainSet['sra'] + mainSet['or'] * tf
-    P[2, 0:3], P[2, 3] = mainSet['ef'], tf
-    Pa = P / P[2, 3]
-    return Pa
-def MakeFolder(pathFolder): # 202109131100 (last read 2022-06-29)
-    ''' comments:
-    .- input pathFolder is a string
-        .- pathFolder is created if it does not exist
-    '''
-    if not os.path.exists(pathFolder):
-        os.makedirs(pathFolder)
+def Vid2VidModified_2504(pathVid0, pathVid1, fps=0., round=True, scl=1., t0InSeconds=0., t1InSeconds=np.inf, overwrite=False):  # 2010-01-01; lm:2025-06-23; lr:2025-07-11
+    if pathVid1 == pathVid0:
+        raise Exception("Invalid input: 'pathVid0' and 'pathVid1' must be different")
+    pathFld0, fnVid0 = os.path.split(pathVid0)
+    pathFld1, fnVid1 = os.path.split(pathVid1)
+    os.makedirs(pathFld1, exist_ok=True)
+    if os.path.exists(pathVid1):
+        if overwrite:
+            os.remove(pathVid1)
+        else:
+            return None
+    fnVidTMP = '000_{:}{:}'.format(''.join(random.choices(string.ascii_letters, k=20)), os.path.splitext(fnVid1)[1])
+    pathVidTMP = os.path.join(pathFld0, fnVidTMP)  # IMP*; we always run in pathFld0
+    if os.path.exists(pathVidTMP):  # miracle
+        os.remove(pathVidTMP)
+    (nc0, nr0), fps0, nOfFrames0 = PathVid2NcNr(pathVid0), PathVid2FPS(pathVid0), PathVid2NOfFrames(pathVid0)
+    t0InSeconds0, t1InSeconds0 = 0, (nOfFrames0 - 1) / fps0  # IMP*
+    fps1 = RecomputeFPS_2502(fps, fps0, round=round)
+    if np.isclose(fps0, fps1):
+        shutil.copy2(pathVid0, pathVidTMP)  # IMP*
+    else:
+        cmd = ['ffmpeg', '-i', fnVid0, '-filter:v', 'fps=fps={:.8f}'.format(fps1), fnVidTMP]
+        subprocess.run(cmd, cwd=pathFld0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    if not os.path.exists(pathVidTMP):
+        raise Exception("Unexpected condition: unable to change fps of '{}'".format(pathVid0))
+    t0InSeconds1, t1InSeconds1 = max(t0InSeconds, t0InSeconds0), min(t1InSeconds, t1InSeconds0)
+    if not (np.isclose(t0InSeconds0, t0InSeconds1) and np.isclose(t1InSeconds0, t1InSeconds1)):
+        t0 = '{:02}:{:02}:{:02}'.format(*map(int, [t0InSeconds1 // 3600, (t0InSeconds1 % 3600) // 60, t0InSeconds1 % 60]))
+        t1 = '{:02}:{:02}:{:02}'.format(*map(int, [t1InSeconds1 // 3600, (t1InSeconds1 % 3600) // 60, t1InSeconds1 % 60]))
+        fnAux = '{:}_aux{:}'.format(os.path.splitext(fnVidTMP)[0], os.path.splitext(fnVidTMP)[1])
+        cmd = ['ffmpeg', '-ss', t0, '-i', fnVidTMP, '-to', t1, fnAux]
+        subprocess.run(cmd, cwd=pathFld0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        shutil.move(os.path.join(pathFld0, fnAux), pathVidTMP)
+    nc1, nr1 = int(np.round(scl * nc0)), int(np.round(scl * nr0))
+    if not (np.isclose(nc0, nc1) and np.isclose(nr0, nr1)):
+        fnAux = '{:}_aux{:}'.format(os.path.splitext(fnVidTMP)[0], os.path.splitext(fnVidTMP)[1])
+        cmd = ['ffmpeg', '-i', fnVidTMP, '-vf', f'scale={nc1}:{nr1}', '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast', fnAux]
+        subprocess.run(cmd, cwd=pathFld0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        shutil.move(os.path.join(pathFld0, fnAux), pathVidTMP)
+    shutil.move(pathVidTMP, pathVid1)
     return None
-def NormalizeALine(line, options={}): # 202206201459 (last read 2022-06-29)
-    ''' comments:
-    .- input line is a dictionary (including at least 'lx', 'ly' and 'lt')
-        .- a line is so that line['lx'] * x + line['ly'] * y + line['lt'] = 0
-        .- a normalized line is so that line['lx'] ** 2 + line['ly'] ** 2 = 1
-    .- output line includes key 'isNormalized' (=True)
-    .- output line maintains the orientation of input line
-    '''
-    keys, defaultValues = ['forceToNormalize'], [False]
-    options = CompleteADictionary(options, keys, defaultValues)
-    if options['forceToNormalize'] or 'isNormalized' not in line.keys() or not line['isNormalized']:
-        lm = np.sqrt(line['lx'] ** 2 + line['ly'] ** 2)
-        line = {item:line[item]/lm for item in ['lx', 'ly', 'lt']}
-        line['isNormalized'] = True
-    return line
-def Pa2Pa11(Pa): # 202201250835 (last read 2022-07-06)
-    ''' comments:
-    .- input Pa is a 3x4-float-ndarray
-    .- output Pa11 is a 11-float-ndarray
-    '''
-    Pa11 = np.ones(11)
-    Pa11[0:4], Pa11[4:8], Pa11[8:11] = Pa[0, 0:4], Pa[1, 0:4], Pa[2, 0:3]
-    return Pa11
-def PointInALineClosestToAPoint(line, x, y): # 202205260853 (last read 2022-06-20, checked graphically with auxiliar code)
-    ''' comments:
-    .- input line is a dictionary (including at least 'lx', 'ly' and 'lt')
-    .- input x and y are floats or float-ndarrays of the same length
-    .- output xC and yC are floats or float-ndarrays
-    '''
-    line = NormalizeALine(line)
-    xC = line['ly'] * (line['ly'] * x - line['lx'] * y) - line['lx'] * line['lt']
-    yC = line['lx'] * (line['lx'] * y - line['ly'] * x) - line['ly'] * line['lt']
-    return xC, yC
-def Polyline2InnerHexagonalMesh(polyline, d, options={}): # 202205111346 (last read 2022-07-02)
-    ''' comments:
-    .- input polyline is a dictionary (including at least 'xs' and 'ys')
-    .- input d is a float
-    .- output xsM and ysM are float-ndarrays of the same length
-    '''
-    keys, defaultValues = ['epsilon'], [1.e-11]
-    options = CompleteADictionary(options, keys, defaultValues)
-    xsC, ysC = CloudOfPoints2Rectangle(polyline['xs'], polyline['ys'], options={'margin':2.1*d})[0:2]
-    v1 = np.asarray([xsC[1] - xsC[0], ysC[1] - ysC[0]]); l1 = np.sqrt(np.sum(v1 ** 2)); u1 = v1 / l1; n1 = int(l1 / d) + 1
-    v2 = np.asarray([xsC[2] - xsC[1], ysC[2] - ysC[1]]); l2 = np.sqrt(np.sum(v2 ** 2)); u2 = v2 / l2; n2 = int(l2 / (2. * d * np.cos(np.pi / 6.))) + 1 # cos(30º)
-    xsM, ysM = [[] for item in range(2)]
-    for i1, i2 in itertools.product(range(n1), range(n2)):
-        x0 = xsC[0]
-        y0 = ysC[0]
-        xsM.append(x0 + i1 * d * u1[0] + i2 * 2. * d * np.cos(np.pi / 6.) * u2[0])
-        ysM.append(y0 + i1 * d * u1[1] + i2 * 2. * d * np.cos(np.pi / 6.) * u2[1])
-        x0 = xsC[0] + d / 2. * u1[0] + d * np.cos(np.pi / 6.) * u2[0]
-        y0 = ysC[0] + d / 2. * u1[1] + d * np.cos(np.pi / 6.) * u2[1]
-        xsM.append(x0 + i1 * d * u1[0] + i2 * 2. * d * np.cos(np.pi / 6.) * u2[0])
-        ysM.append(y0 + i1 * d * u1[1] + i2 * 2. * d * np.cos(np.pi / 6.) * u2[1])
-    xsM, ysM = [np.asarray(item) for item in [xsM, ysM]]
-    posIns = CloudOfPoints2InnerPositionsForPolyline(xsM, ysM, polyline, options={'epsilon':options['epsilon']})
-    xsM, ysM = [item[posIns] for item in [xsM, ysM]]
-    return xsM, ysM
-def Poss0AndPoss1InFind2DTransform(n): # 202207112001 (last read 2022-11-09)
-    ''' comments:
-    .- input n is an integer
-    .- output poss0 and poss1 are integer-lists
-    '''
-    poss0 = [2*pos+0 for pos in range(n)]
-    poss1 = [2*pos+1 for pos in range(n)]
-    return poss0, poss1
-def R2UnitVectors(R): # 202109131100 (last read 2022-06-29)
-    ''' comments:
-    .- input R is a 3x3-float-ndarray
-        .- the rows of R are eu, ev and ef
-    .- output eu, ev and ef are 3-float-ndarrays
-    '''
-    assert R.shape == (3, 3)
-    eu, ev, ef = R[0, :], R[1, :], R[2, :]
-    return eu, ev, ef
-def ReadCalTxt(pathCalTxt): # 202110131422 (last read 2022-07-01)
-    ''' comments:
-    .- input pathCalTxt is a string
-    .- output allVariables is a 14-float-ndarray
-    .- output nc and nr are integers
-    .- output errorT is a float
-    '''
-    rawData = np.asarray(ReadRectangleFromTxt(pathCalTxt, {'c1':1, 'valueType':'float'}))
-    allVariables, nc, nr, errorT = rawData[0:14], int(np.round(rawData[14])), int(np.round(rawData[15])), rawData[16]
-    return allVariables, nc, nr, errorT
-def ReadMainSetFromCalTxt(pathCalTxt, options={}): # 202111171714 (read 2022-07-06)
-    ''' comments:
-    .- input pathCalTxt is a string
-    .- output mainSet is a dictionary
-    '''
-    keys, defaultValues = ['orderOfHorizonPoly', 'radiusOfEarth'], [5, 6.371e+6]
-    options = CompleteADictionary(options, keys, defaultValues)
-    allVariables, nc, nr = ReadCalTxt(pathCalTxt)[0:3]
-    mainSet = AllVariables2MainSet(allVariables, nc, nr, options={item:options[item] for item in ['orderOfHorizonPoly', 'radiusOfEarth']})
-    return mainSet
-def ReadRectangleFromTxt(pathFile, options={}): # 202109141200 (last read 2022-11-10) avoid its use -> np.loadtxt
-    assert os.path.isfile(pathFile)
-    keys, defaultValues = ['c0', 'c1', 'r0', 'r1', 'valueType', 'nullLine'], [0, 0, 0, 0, 'str', None]
-    options = CompleteADictionary(options, keys, defaultValues)
-    openedFile = open(pathFile, 'r')
-    listOfLines = openedFile.readlines()
-    openedFile.close()
-    if options['nullLine'] is not None:
-        listOfLines = [item for item in listOfLines if item[0] != options['nullLine']]
-    if not (options['r0'] == 0 and options['r1'] == 0): # if r0 == r1 == 0 it loads all the rows
-        listOfLines = [listOfLines[item] for item in range(options['r0'], options['r1'])]
-    for posOfLine in range(len(listOfLines)-1, -1, -1):
-        if listOfLines[posOfLine] == '\n':
-            print('... line {:5} is empty'.format(posOfLine))
-            del listOfLines[posOfLine]
-    stringsInLines = [item.split() for item in listOfLines]
-    rectangle = stringsInLines
-    if not (options['c0'] == options['c1'] == 0): # if c0 == c1 == 0 it loads all the columns
-        rectangle = [item[options['c0']:options['c1']] for item in rectangle]
-    if options['valueType'] == 'str':
-        pass
-    elif options['valueType'] == 'float':
-        rectangle = [[float(item) for item in line] for line in rectangle]
-    elif options['valueType'] == 'int':
-        rectangle = [[int(item) for item in line] for line in rectangle]
-    else:
-        assert False
-    if options['c1'] - options['c0'] == 1: # one column
-        rectangle = [item[0] for item in rectangle]
-    if options['r1'] - options['r0'] == 1: # one row
-        rectangle = rectangle[0]
-    return rectangle
-def TH2LOneStep(T, h, g): # 202207091907 (last read 2022-07-09)
-    ''' comments:
-    .- input T, h and are floats or float-ndarrays of the same length
-    .- output L is a float or a float-ndarray
-    '''
-    w = 2. * np.pi / T
-    kappa = w ** 2 * h / g
-    mu = Kappa2MuOneStep(kappa)
-    k = mu / h
-    L = 2. * np.pi / k
-    return L
-def UDaVDa2UUaVUa(mainSet, uDas, vDas): # uD* and vD* -> uU* and vU* 202207061139 (last read 2022-07-06, checked graphically with auxiliar code) potentially expensive
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'k1a', 'k2a', 'p1a', 'p2a')
-    .- input uDas and vDas are float-ndarrays of the same length
-    .- output uUas and vUas are float-ndarrays of the same length of uDas and vDas or Nones (if it does not succeed)
-    .- the funcion is implicit unless k2a = p1a = p2a = 0
-    '''
-    def DeltaAndError220706(mainSet, uDas, vDas, uUas, vUas): # 202109131500
-        uDasN, vDasN = UUaVUa2UDaVDa(mainSet, uUas, vUas)
-        fxs, fys = uDasN - uDas, vDasN - vDas # errors
-        error = np.max([np.max(np.abs(fxs)), np.max(np.abs(fys))])
-        aux1s = uUas ** 2 + vUas ** 2
-        aux1suUa = 2. * uUas
-        aux1svUa = 2. * vUas
-        aux2s = 1. + mainSet['k1a'] * aux1s + mainSet['k2a'] * aux1s ** 2
-        aux2suUa = mainSet['k1a'] * aux1suUa + mainSet['k2a'] * 2. * aux1s * aux1suUa
-        aux2svUa = mainSet['k1a'] * aux1svUa + mainSet['k2a'] * 2. * aux1s * aux1svUa
-        aux3suUa = 2. * vUas
-        aux3svUa = 2. * uUas
-        aux4suUa = aux1suUa + 4. * uUas
-        aux4svUa = aux1svUa
-        aux5suUa = aux1suUa
-        aux5svUa = aux1svUa + 4. * vUas
-        JuUasuUa = aux2s + uUas * aux2suUa + mainSet['p2a'] * aux4suUa + mainSet['p1a'] * aux3suUa
-        JuUasvUa = uUas * aux2svUa + mainSet['p2a'] * aux4svUa + mainSet['p1a'] * aux3svUa
-        JvUasuUa = vUas * aux2suUa + mainSet['p1a'] * aux5suUa + mainSet['p2a'] * aux3suUa
-        JvUasvUa = aux2s + vUas * aux2svUa + mainSet['p1a'] * aux5svUa + mainSet['p2a'] * aux3svUa
-        determinants = JuUasuUa * JvUasvUa - JuUasvUa * JvUasuUa
-        determinants = ClipWithSign(determinants, 1.e-8, 1. / 1.e-8)
-        JinvuUasuUa = + JvUasvUa / determinants
-        JinvvUasvUa = + JuUasuUa / determinants
-        JinvuUasvUa = - JuUasvUa / determinants
-        JinvvUasuUa = - JvUasuUa / determinants
-        duUas = - JinvuUasuUa * fxs - JinvuUasvUa * fys
-        dvUas = - JinvvUasuUa * fxs - JinvvUasvUa * fys
-        return duUas, dvUas, error
-    possZero = np.where(np.sqrt(uDas ** 2 + vDas ** 2) < 1.e-11)[0]
-    if len(possZero) > 0:
-        uDas[possZero], vDas[possZero] = [0.1 * np.ones(len(possZero)) for item in range(2)] # give another value (0.1) to proceed
-    if np.allclose([mainSet['k2a'], mainSet['p1a'], mainSet['p2a']], [0., 0., 0.]): # explicit
-        if np.allclose(mainSet['k1a'], 0.):
-            uUas, vUas = uDas * 1., vDas * 1.
-        else: # Cardano's solution
-            xis = mainSet['k1a'] * (uDas ** 2 + vDas ** 2)
-            xs = Xi2XForParabolicDistortion(xis) # = mainSet['k1a'] * (uUas ** 2 + vUas ** 2)
-            uUas, vUas = [item / (1 + xs) for item in [uDas, vDas]]
-        converged = True
-    else: # implicit (Newton using DeltaAndError220706)
-        uUas, vUas, error, converged, counter, speed = 1. * uDas, 1. * vDas, 1.e+11, False, 0, 1. # initialize undistorted with distorted
-        while not converged and counter <= 20:
-            duUas, dvUas, errorN = DeltaAndError220706(mainSet, uDas, vDas, uUas, vUas)
-            if errorN > 2. * error:
-                break
-            uUas, vUas, error = uUas + speed * duUas, vUas + speed * dvUas, 1. * errorN
-            converged, counter = error <= 1.e-11, counter + 1
-    if not converged:
-        uUas, vUas = None, None
-    else:
-        if len(possZero) > 0:
-            uDas[possZero], vDas[possZero] = 0., 0.
-            uUas[possZero], vUas[possZero] = 0., 0.
-        uDasR, vDasR = UUaVUa2UDaVDa(mainSet, uUas, vUas)
-        assert max([np.max(np.abs(uDasR - uDas)), np.max(np.abs(vDasR - vDas))]) < 5. * 1.e-11
-    return uUas, vUas
-def UUaVUa2UDaVDa(mainSet, uUas, vUas): # uU* and vU* -> uD* and vD* 202109131500 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'k1a', 'k2a', 'p1a' and 'p2a')
-    .- input uUas and vUas are floats or float-ndarrays of the same length
-    .- output uDas and vDas are floats or float-ndarrays of the same length of uUas and vUas
-    '''
-    aux1s = uUas ** 2 + vUas ** 2
-    aux2s = 1. + mainSet['k1a'] * aux1s + mainSet['k2a'] * aux1s ** 2
-    aux3s = 2. * uUas * vUas
-    aux4s = aux1s + 2. * uUas ** 2
-    aux5s = aux1s + 2. * vUas ** 2
-    uDas = uUas * aux2s + mainSet['p2a'] * aux4s + mainSet['p1a'] * aux3s
-    vDas = vUas * aux2s + mainSet['p1a'] * aux5s + mainSet['p2a'] * aux3s
-    return uDas, vDas
-def UUaVUa2XYZ(mainSet, planes, uUas, vUas, options={}): # 202109141800 (last read 2022-07-12) potentially expensive
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'eu', 'ev', 'ef' and 'pc')
-    .- input planes is a dictionary (including at least 'pxs', 'pys', 'pzs' and 'pts')
-        .- input planes['pxs'/'pys'/'pzs'/'pts'] is a float or a float-ndarray of the same length of uUas and vUas
-    .- input uUas and vUas are float-ndarrays of the same length
-    .- output xs, ys, zs are float-ndarrays of the same length of uUas and vUas
-    .- output possRightSideOfCamera is a list of integers or None (if not options['returnPositionsRightSideOfCamera'])
-    '''
-    keys, defaultValues = ['returnPositionsRightSideOfCamera'], [False]
-    options = CompleteADictionary(options, keys, defaultValues)
-    A11s = mainSet['ef'][0] * uUas - mainSet['eu'][0]
-    A12s = mainSet['ef'][1] * uUas - mainSet['eu'][1]
-    A13s = mainSet['ef'][2] * uUas - mainSet['eu'][2]
-    bb1s = uUas * np.sum(mainSet['pc'] * mainSet['ef']) - np.sum(mainSet['pc'] * mainSet['eu'])
-    A21s = mainSet['ef'][0] * vUas - mainSet['ev'][0]
-    A22s = mainSet['ef'][1] * vUas - mainSet['ev'][1]
-    A23s = mainSet['ef'][2] * vUas - mainSet['ev'][2]
-    bb2s = vUas * np.sum(mainSet['pc'] * mainSet['ef']) - np.sum(mainSet['pc'] * mainSet['ev'])
-    A31s = + planes['pxs'] # float or float-ndarray
-    A32s = + planes['pys'] # float or float-ndarray
-    A33s = + planes['pzs'] # float or float-ndarray
-    bb3s = - planes['pts'] # float or float-ndarray
-    dens = A11s * (A22s * A33s - A23s * A32s) + A12s * (A23s * A31s - A21s * A33s) + A13s * (A21s * A32s - A22s * A31s)
-    dens = ClipWithSign(dens, 1.e-11, 1.e+11) # it was 1.e-8, 1.e+8
-    xs = (bb1s * (A22s * A33s - A23s * A32s) + A12s * (A23s * bb3s - bb2s * A33s) + A13s * (bb2s * A32s - A22s * bb3s)) / dens
-    ys = (A11s * (bb2s * A33s - A23s * bb3s) + bb1s * (A23s * A31s - A21s * A33s) + A13s * (A21s * bb3s - bb2s * A31s)) / dens
-    zs = (A11s * (A22s * bb3s - bb2s * A32s) + A12s * (bb2s * A31s - A21s * bb3s) + bb1s * (A21s * A32s - A22s * A31s)) / dens
-    poss = np.where(np.max(np.asarray([np.abs(xs), np.abs(ys), np.abs(zs)]), axis=0) < 1.e+8)[0]
-    if isinstance(planes['pxs'], np.ndarray):
-        auxs = planes['pxs'][poss] * xs[poss] + planes['pys'][poss] * ys[poss] + planes['pzs'][poss] * zs[poss] + planes['pts'][poss]
-    else:
-        auxs = planes['pxs'] * xs[poss] + planes['pys'] * ys[poss] + planes['pzs'] * zs[poss] + planes['pts']
-    assert np.allclose(auxs, np.zeros(len(poss)))
-    poss = np.where(np.max(np.asarray([np.abs(xs), np.abs(ys), np.abs(zs)]), axis=0) < 1.e+8)[0]
-    uUasR, vUasR = XYZ2UUaVUa(mainSet, xs[poss], ys[poss], zs[poss], options={})[0:2]
-    assert (np.allclose(uUasR, uUas[poss]) and np.allclose(vUasR, vUas[poss]))
-    if options['returnPositionsRightSideOfCamera']:
-        possRightSideOfCamera = XYZ2PositionsRightSideOfCamera(mainSet, xs, ys, zs)
-    else:
-        possRightSideOfCamera = None
-    return xs, ys, zs, possRightSideOfCamera
-def UaVa2CR(mainSet, uas, vas): # 202109101200 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'sca', 'sra', 'oc' and 'or')
-        .- mainSet['sca'] and mainSet['sra'] are non-zero, but allowed to be negative
-    .- input uas and vas are floats or float-ndarrays of the same length
-    .- output cs and rs are floats or float-ndarrays of the same length of uas and vas
-    '''
-    cs = uas / mainSet['sca'] + mainSet['oc']
-    rs = vas / mainSet['sra'] + mainSet['or']
-    return cs, rs
-def UnitVectors2R(eu, ev, ef): # 202109231416 (last read 2022-06-29)
-    ''' comments:
-    .- input eu, ev and ef are 3-float-ndarrays
-    .- output R is a 3x3-float-ndarray
-        .- the rows of R are eu, ev and ef
-    '''
-    R = np.asarray([eu, ev, ef])
-    return R
-def Video2Snaps(pathVideo, pathFldSnaps, fps, options={}): # 202109271245 (last read 2022-07-10)
-    ''' comments:
-    .- input pathVideo is a string
-    .- input pathFldSnaps is a string
-    .- input fps is a float (desired frames per second)
-    '''
-    keys, defaultValues = ['extension'], ['png']
-    options = CompleteADictionary(options, keys, defaultValues)
-    MakeFolder(pathFldSnaps)
-    fnVideo = os.path.splitext(os.path.split(pathVideo)[1])[0]
-    video = cv2.VideoCapture(pathVideo)
-    fpsOfVideo = video.get(cv2.CAP_PROP_FPS)
-    fps = min([fpsOfVideo / int(fpsOfVideo / fps), fpsOfVideo])
-    milisecond = 0.
-    hasFrame = WriteASnap(video, fnVideo, milisecond, pathFldSnaps, options={'extension':options['extension']})
-    while hasFrame:
-        milisecond = milisecond + 1000. / fps
-        hasFrame = WriteASnap(video, fnVideo, milisecond, pathFldSnaps, options={'extension':options['extension']})
-    return None
-def WGH2KOneStep(w, g, h): # 202207091928 (last read 2022-07-09)
-    ''' comments:
-    .- input w, g and h are floats or float-ndarrays of the same length
-    .- output k is a float or a float-ndarray
-    '''
+def WGH2KOneStep(w, g, h):  # lm:2022-07-09; lr:2025-06-26
+    if np.any(np.asarray(h) <= 0):
+        raise Exception("Invalid input: 'h' must be positive")
     kappa = w ** 2 * h / g
     mu = Kappa2MuOneStep(kappa)
     k = mu / h
     return k
-def WriteASnap(video, fnVideo, milisecond, pathFldSnaps, options={}): # 202109271244 (last read 2022-07-10)
-    ''' comments:
-    .- input video is a cv2.VideoCapture
-    .- input fnVideo is a string
-    .- input milisecond is a float
-    .- input pathFldSnaps is a string
-    .- output hasFrame is a boolean
-    '''
-    keys, defaultValues = ['extension'], ['png']
-    options = CompleteADictionary(options, keys, defaultValues)
-    video.set(cv2.CAP_PROP_POS_MSEC, milisecond)
-    pathSnap = pathFldSnaps + os.sep + '{:}_{:}.{:}'.format(fnVideo, str(int(milisecond)).zfill(12), options['extension']) # IMP* milisecond
-    hasFrame, img = video.read()
-    if hasFrame:
-        MakeFolder(os.path.split(pathSnap)[0])
-        cv2.imwrite(pathSnap, img)
-    return hasFrame
-def X2DMD(X, r): # 202207121101 (last read 2022-07-12)
-    ''' comments:
-    .- input X is a  (nx x nt)-float-ndarray
-    .- input r is an integer
-    .- output Phi and Lambda are float-ndarrays
-        .- output Phi[:, posOfMode] are the space-modes
-        .- output np.imag(np.log(Lambda[posOfMode]) / dt) is the period (dt is the time step)
-    '''
-    X0, X1 = X[:, 0:-1], X[:, 1:]
+def X2DMD_2506(X, rank, dt=1):  # lm:2025-06-16; lm:2025-07-03
+    X0, X1 = X[:, :-1], X[:, 1:]
     U, S, Vstar = np.linalg.svd(X0, full_matrices=False)
     Ustar, V = [np.conj(np.transpose(item)) for item in [U, Vstar]]
-    U, S, V = U[:, 0:r], S[0:r], V[:, 0:r]
+    U, S, V = U[:, :rank], S[:rank], V[:, :rank]
     Ustar, Vstar = [np.conj(np.transpose(item)) for item in [U, V]]
-    Sinv = np.diag(1 / S)
+    Sinv = np.diag([1/s if s > 1e-14 else 0 for s in S])  # it was Sinv = np.diag(1 / S)
     B = np.dot(Ustar, np.dot(X1, np.dot(V, Sinv)))
     Lambda, W = np.linalg.eig(B)
     Phi = np.dot(X1, np.dot(V, np.dot(Sinv, W)))
-    return Phi, Lambda
-def X2EOF(X): # 202002161020 (last read 2022-07-12)
-    ''' comments:
-    .- input X is a (nx x nt)-float-ndarray
-    .- output EOF is a dictionary (including 'EOFs', 'amplitudesForEOFs', 'explainedVariances', 'cumulativeExplainedVariances')
-    '''
+    Ts = 2 * np.pi * dt / np.imag(np.log(Lambda))
+    phases = [np.angle(Phi[:, pos]) for pos in range(Phi.shape[1])]
+    amplitudes = [np.abs(Phi[:, pos]) for pos in range(Phi.shape[1])]
+    if True:  # avoidable check for readability
+        assert len(Ts) == len(phases) == len(amplitudes) == rank
+    return Ts, phases, amplitudes
+def X2EOF_2502(X):  # 2000-01-01; lm:2020-02-16; lr:2025-06-25
     (nx, nt), nq = X.shape, np.min(X.shape)
-    XMean, XHat = X2XMean(X), X2XHat(X)
-    U, S, VH = np.linalg.svd(XHat, full_matrices=False) # (nx x nq)-ndarray, nq array, nq x nt ndarray
-    SVH = np.dot(np.diag(S), VH) # nq x nt ndarray
-    variances = np.dot(SVH, np.conj(SVH.T)) # nq x nq ndarray
-    assert U.shape == (nx, nq) and S.shape == (nq, ) and VH.shape == (nq, nt) 
-    EOF = {'nx':nx, 'nt':nt, 'nq':nq, 'U':U, 'SVH':SVH}
-    EOF['EOF0'] = XMean # nx-array of floats
-    EOF['EOFs'] = [U[:, item] for item in range(0, nq)] # nq-list of nx-arrays of floats
-    EOF['amplitudesForEOFs'] = [SVH[item, :] for item in range(0, nq)] # nq-list of nt-arrays of floats
-    EOF['explainedVariances'] = np.diag(variances) / np.sum(np.diag(variances)) # nq-array of floats
-    EOF['cumulativeExplainedVariances'] = np.cumsum(EOF['explainedVariances']) # nq-array of floats
-    return EOF
-def X2LSByCandes(X, options={}): # ROBUST PCA by Candes
-    class RPCAByCandes:
-        def __init__(self, D, mu=None, lmbda=None):
-            self.D = D
-            self.S = np.zeros(self.D.shape)
-            self.Y = np.zeros(self.D.shape)
-            if mu:
-                self.mu = mu
-            else:
-                self.mu = np.prod(self.D.shape) / (4 * np.linalg.norm(self.D, ord=1))
-            self.mu_inv = 1 / self.mu
-            if lmbda:
-                self.lmbda = lmbda
-            else:
-                self.lmbda = 1 / np.sqrt(np.max(self.D.shape))
-        @staticmethod
-        def frobenius_norm(M):
-            return np.linalg.norm(M, ord='fro')
-        @staticmethod
-        def shrink(M, tau):
-            return np.sign(M) * np.maximum((np.abs(M) - tau), np.zeros(M.shape))
-        def svd_threshold(self, M, tau):
-            U, S, V = np.linalg.svd(M, full_matrices=False)
-            return np.dot(U, np.dot(np.diag(self.shrink(S, tau)), V))
-        def fit(self, tol=None, max_iter=10000, iter_print=100):
-            iter = 0
-            err = np.Inf
-            Sk = self.S
-            Yk = self.Y
-            Lk = np.zeros(self.D.shape)
-            if tol:
-                _tol = tol
-            else:
-                _tol = 1E-7 * self.frobenius_norm(self.D)
-            while (err > _tol) and iter < max_iter:
-                Lk = self.svd_threshold(self.D - Sk + self.mu_inv * Yk, self.mu_inv) # this line implements step 3
-                Sk = self.shrink(self.D - Lk + (self.mu_inv * Yk), self.mu_inv * self.lmbda) # this line implements step 4
-                Yk = Yk + self.mu * (self.D - Lk - Sk) # this line implements step 5
-                err = self.frobenius_norm(self.D - Lk - Sk)
-                iter += 1
-            self.L = Lk
-            self.S = Sk
-            return Lk, Sk
-    keys, defaultValues = ['max_iter', 'iter_print', 'mu'], [10000, 100, None]
-    options = CompleteADictionary(options, keys, defaultValues)
-    rpca = RPCAByCandes(X, mu=options['mu'])
-    L, S = rpca.fit(max_iter=options['max_iter'], iter_print=options['iter_print'])
+    XMean, XHat = X2XMean_2502(X), X2XHat_2502(X)
+    U, S, VH = np.linalg.svd(XHat, full_matrices=False)  # (nx x nq)-ndarray, nq array, nq x nt ndarray
+    SVH = np.dot(np.diag(S), VH)  # nq x nt ndarray
+    expVariances = np.real(np.diag(np.dot(SVH, np.conj(np.transpose(SVH)))))  # nq x nq ndarray
+    if True:  # avoidable check for readability
+        assert np.allclose(expVariances, S**2)
+        assert U.shape == (nx, nq) and S.shape == (nq, ) and VH.shape == (nq, nt) 
+        assert np.allclose(XHat, np.dot(U, SVH))
+        assert np.allclose(np.dot(np.conj(U.transpose()), U), np.eye(nq)) 
+        assert np.allclose(np.dot(VH, np.conj(VH.transpose())), np.eye(nq))
+    spatialMean = XMean
+    spatialEOFs = [U[:, item] for item in range(nq)]
+    temporalEOFs = [SVH[item, :] for item in range(nq)]
+    expVariances = expVariances / np.sum(expVariances)
+    cumVariances = np.cumsum(expVariances)
+    return nx, nt, nq, U, SVH, spatialMean, spatialEOFs, temporalEOFs, expVariances, cumVariances
+def X2LSByCandes_2506(X, max_iter=10000, tol=None, mu=None, lmbda=None):  # 2000-01-01; lm:2025-07-03; lr:2025-07-13
+    m, n = X.shape
+    normX = np.linalg.norm(X, 'fro')
+    if mu is None:
+        mu = (m * n) / (4 * np.sum(np.abs(X) + 1e-8))  # WATCH OUT: epsilon
+    mu_inv = 1 / mu
+    if lmbda is None:
+        lmbda = 1 / np.sqrt(max(m, n))
+    if tol is None:
+        tol = 1e-7 * normX  # WATCH OUT: epsilon
+    L, S, Y = [np.zeros_like(X, dtype=X.dtype) for _ in range(3)]
+    for _ in range(max_iter):
+        U, s, Vh = np.linalg.svd(X - S + mu_inv * Y, full_matrices=False)
+        s_thresh = np.maximum(np.abs(s) - mu_inv, 0)
+        L = (U @ np.diag(s_thresh)) @ Vh
+        D = X - L + mu_inv * Y
+        S = np.sign(D) * np.maximum(np.abs(D) - mu_inv * lmbda, 0)
+        Z = X - L - S
+        Y += mu * Z
+        err = np.linalg.norm(Z, 'fro')
+        if err < tol:
+            break
     return L, S
-def X2XHat(X): # 202002161020 (last read 2022-07-12)
-    ''' comments:
-    .- input X is a (nx x nt)-float-ndarray
-    .- output XHat is a (nx x nt)-float-ndarray is so that each row sums 0
-    '''
-    XHat = X - np.outer(X2XMean(X), np.ones(X.shape[1]))
-    assert np.allclose(XHat.mean(axis=1), np.zeros(X.shape[0]))
+def X2XHat_2502(X):  # 1900-01-01; lm:2025-04-11; lr:2025-06-25
+    XMean = np.mean(X, axis=1, keepdims=True)
+    XHat = X - XMean
     return XHat
-def X2XMean(X): # 202002161020 (last read 2022-07-12)
-    ''' comments:
-    .- input X is a (nx x nt)-float-ndarray
-    .- output XMean is a nx-float-ndarray
-    '''
+def X2XMean_2502(X):  # 1900-01-01; lm:2025-04-11; lm:2025-06-25
+    if X.ndim != 2:
+        raise Exception("Invalid input: 'X' must be a 2D float ndarray")
     XMean = np.mean(X, axis=1)
-    assert len(XMean) == X.shape[0]
     return XMean    
-def XYZ2CDRD(mainSet, xs, ys, zs, options={}): # 202109131600 (last read 2022-07-12)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'nc' and 'nr')
-    .- input xs, ys and zs are float-ndarrays of the same length
-    .- output cDs and rDs are float-ndarrays of the same length of xs, ys and zs
-    .- output possGood is a list of integers or None (if not options['returnGoodPositions'])
-    '''
-    keys, defaultValues = ['imgMargins', 'returnGoodPositions'], [{'c0':0, 'c1':0, 'r0':0, 'r1':0, 'isComplete':True}, False]
-    options = CompleteADictionary(options, keys, defaultValues)
-    uUas, vUas, possGood = XYZ2UUaVUa(mainSet, xs, ys, zs, options={'returnPositionsRightSideOfCamera':options['returnGoodPositions']})
-    uDas, vDas = UUaVUa2UDaVDa(mainSet, uUas, vUas)
-    cDs, rDs = UaVa2CR(mainSet, uDas, vDas)
-    if options['returnGoodPositions']: # so far possGood are at the right side of the camera
-        if len(possGood) > 0:
-            nc, nr, cDsGood, rDsGood = mainSet['nc'], mainSet['nr'], cDs[possGood], rDs[possGood]
-            possGoodInGood = CR2PositionsWithinImage(nc, nr, cDsGood, rDsGood, options={'imgMargins':options['imgMargins']})
-            possGood = [possGood[item] for item in possGoodInGood]
-        if len(possGood) > 0:
-            xsGood, ysGood, zsGood, cDsGood, rDsGood = [item[possGood] for item in [xs, ys, zs, cDs, rDs]]
-            xsGoodR, ysGoodR = CDRDZ2XY(mainSet, cDsGood, rDsGood, zsGood, options={})[0:2] # all, not only good positions; potentially expensive
-            possGoodInGood = np.where(np.sqrt((xsGood - xsGoodR) ** 2 + (ysGood - ysGoodR) ** 2) < 1.e-5)[0] # 1.e-5 could be changed
-            possGood = [possGood[item] for item in possGoodInGood]
-    else: # possGood is None from XYZ2UUaVUa above
-        assert possGood is None
-    return cDs, rDs, possGood
-def XYZ2PositionsRightSideOfCamera(mainSet, xs, ys, zs): # 202109231412 (last read 2022-07-06)
-    '''
-    .- input mainSet is a dictionary (including 'xc', 'yc', 'zc' and 'ef')
-    .- input xs, ys and zs are float-ndarrays of the same length
-    .- output possRightSideOfCamera is a integer-list
-    '''
-    xas, yas, zas = xs - mainSet['xc'], ys - mainSet['yc'], zs - mainSet['zc']
-    possRightSideOfCamera = np.where(xas * mainSet['ef'][0] + yas * mainSet['ef'][1] + zas * mainSet['ef'][2] > 0)[0]
+def XYZ2CDRD_2410(xs, ys, zs, dMCS, rtrnPossG=False, margin=0):  # explicit if not rtrnPossG; 2010-01-01; lm:2025-05-05; lr:2025-06-23
+    Px, rangeC, dAllVar, ef, nc, nr = [dMCS[item] for item in ['Px', 'rangeC', 'dAllVar', 'ef', 'nc', 'nr']]
+    cUs, rUs, possG = XYZ2CURU_2410(xs, ys, zs, Px, rangeC, rtrnPossG=rtrnPossG, dCamVar=dAllVar, ef=ef, nc=nc, nr=nr)
+    cDs, rDs, possGH = CURU2CDRD_2410(cUs, rUs, dAllVar, dAllVar, rangeC, rtrnPossG=rtrnPossG, nc=nc, nr=nr, margin=margin)
+    possG = np.intersect1d(possG, possGH, assume_unique=True)
+    if rtrnPossG and len(possG) > 0:
+        xsG, ysG, zsG, cDsG, rDsG = [item[possG] for item in [xs, ys, zs, cDs, rDs]]
+        xsGR, ysGR = CDRDZ2XY_2410(cDsG, rDsG, zsG, dMCS)[:2]  # WATCH OUT: potentially expensive
+        possGInPossG = np.where(np.hypot(xsG - xsGR, ysG - ysGR) < 1.e-6)[0]  # WATCH OUT: epsilon; could be 1.e-3 also
+        possG = possG[possGInPossG]
+    return cDs, rDs, possG
+def XYZ2CURU_2410(xs, ys, zs, Px, rangeC, rtrnPossG=False, dCamVar=None, ef=None, nc=None, nr=None):  # 2010-01-01; lm:2025-05-28; lr:2025-07-05
+    if rangeC == 'close':
+        dens = Px[8] * xs + Px[9] * ys + Px[10] * zs + 1
+        dens = ClipWithSign(dens, 1.e-14, np.inf)  # WATCH OUT: epsilon
+        cUs = (Px[0] * xs + Px[1] * ys + Px[2] * zs + Px[3]) / dens
+        rUs = (Px[4] * xs + Px[5] * ys + Px[6] * zs + Px[7]) / dens
+    elif rangeC == 'long':
+        cUs = Px[0] * xs + Px[1] * ys + Px[2] * zs + Px[3]
+        rUs = Px[4] * xs + Px[5] * ys + Px[6] * zs + Px[7]
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
+    if rtrnPossG:
+        possG = XYZ2PossRightSideOfCamera_2410(xs, ys, zs, rangeC, dCamVar=dCamVar, ef=ef)
+        if len(possG) > 0 and nc is not None and nr is not None:
+            cUsG, rUsG = [item[possG] for item in [cUs, rUs]]
+            possGInPossG = CR2PossWithinImage_2502(cUsG, rUsG, nc, nr, margin=-max(nc, nr), case='')  # WATCH OUT: undistorted, large negative margin to relax
+            possG = possG[possGInPossG]
+    else:
+        possG = np.asarray([], dtype=int)
+    return cUs, rUs, possG
+def XYZ2PossRightSideOfCamera_2410(xs, ys, zs, rangeC, dCamVar=None, ef=None):  # 2000-01-01; lr:2025-05-28; lr:2025-06-22
+    if rangeC == 'close':
+        xas, yas, zas = xs - dCamVar['xc'], ys - dCamVar['yc'], zs - dCamVar['zc']
+        possRightSideOfCamera = np.where(xas * ef[0] + yas * ef[1] + zas * ef[2] > 0)[0]
+    elif rangeC == 'long':
+        possRightSideOfCamera = np.arange(len(xs))
+    else:
+        raise Exception("Invalid input: 'rangeC' ('{}') must be 'close' or 'long'".format(rangeC))
     return possRightSideOfCamera
-def XYZ2UUaVUa(mainSet, xs, ys, zs, options={}): # 202109231411 (last read 2022-07-06)
-    ''' comments:
-    .- input mainSet is a dictionary (including at least 'xc', 'yc', 'zc', 'eu', 'ev' and 'ef')
-    .- input xs, ys and zs are float-ndarrays of the same length
-    .- output uUas and vUas are float-ndarrays of the same length of xs, ys and zs
-    .- output possRightSideOfCamera is a list of integers or None (if not options['returnPositionsRightSideOfCamera'])
-    '''
-    keys, defaultValues = ['returnPositionsRightSideOfCamera'], [False]
-    options = CompleteADictionary(options, keys, defaultValues)
-    xas, yas, zas = xs - mainSet['xc'], ys - mainSet['yc'], zs - mainSet['zc']
-    dns = xas * mainSet['ef'][0] + yas * mainSet['ef'][1] + zas * mainSet['ef'][2]
-    dns = ClipWithSign(dns, 1.e-8, 1.e+8)
-    uUas = (xas * mainSet['eu'][0] + yas * mainSet['eu'][1] + zas * mainSet['eu'][2]) / dns
-    vUas = (xas * mainSet['ev'][0] + yas * mainSet['ev'][1] + zas * mainSet['ev'][2]) / dns
-    if options['returnPositionsRightSideOfCamera']:
-        possRightSideOfCamera = XYZ2PositionsRightSideOfCamera(mainSet, xs, ys, zs)
+def XiD2XiUCubicEquation_2410(xiDs, rtrnPossG=False):  # undistort; Cardano; 1900-01-01; lr:2025-05-28; lr:2025-06-23
+    p, qs = -1 / 3, -(xiDs + 2 / 27)
+    Deltas = (xiDs + 4 / 27) * xiDs  # Deltas <= 0 -> -4/27 <= xiD <= 0 -> several solutions
+    possN = np.where(Deltas <= 0)[0]  # possN -> several solutions
+    possP = np.asarray([item for item in np.arange(len(xiDs)) if item not in possN], dtype=int)  # possP -> unique solution
+    auxsN = (qs[possN] + 1j * np.sqrt(np.abs(Deltas[possN]))) / 2
+    auxsP = (qs[possP] + np.sqrt(Deltas[possP])) / 2
+    ns = np.zeros(xiDs.shape) + 1j * np.zeros(xiDs.shape)
+    ns[possN] = np.abs(auxsN) ** (1 / 3) * np.exp(1j * (np.abs(np.angle(auxsN)) + 2 * np.pi * 1) / 3)  # + 2 * pi * j for j = 0, *1*, 2
+    ns[possP] = np.sign(auxsP) * (np.abs(auxsP) ** (1 / 3))
+    xiUs = np.real(p / (3 * ns) - ns - 2 / 3)  # WATCH OUT
+    if rtrnPossG:
+        possG = np.where(xiDs >= -4 / 27)[0]  # works also if len(xiDs) = 0
     else:
-        possRightSideOfCamera = None
-    return uUas, vUas, possRightSideOfCamera
-def Xi2XForParabolicDistortion(xis): # 202207060912 (last read 2022-07-06, checked graphically with auxiliar code)
-    ''' comments:
-    .- input xis is a float-ndarray
-    .- output xs is a float-ndarray
-        .- it is solved: xis = xs ** 3 + 2 * xs ** 2 + xs
-    '''
-    p, qs, Deltas = -1. /3., -(xis + 2. / 27.), (xis + 4. / 27.) * xis
-    if np.max(Deltas) < 0: # for xis in (-4/27, 0)
-        n3s = (qs + 1j * np.sqrt(np.abs(Deltas))) / 2.
-        ns = np.abs(n3s) ** (1. / 3.) * np.exp(1j * (np.abs(np.angle(n3s)) + 2. * np.pi * 1.) / 3.) # we ensure theta > 0; + 2 pi j for j = 0, 1, 2
-    elif np.min(Deltas) >= 0: # for xis not in (-4/27, 0)
-        auxs = (qs + np.sqrt(Deltas)) / 2.
-        ns = np.sign(auxs) * (np.abs(auxs) ** (1. / 3.))
+        possG = np.asarray([], dtype=int)
+    return xiUs, possG
+def XiU2XiDCubicEquation_2410(xiUs, rtrnPossG=False):  # distort; 1900-01-01; lr:2025-05-28; lr:2025-07-01
+    xiDs = xiUs ** 3 + 2 * xiUs ** 2 + xiUs
+    if rtrnPossG:
+        possG = np.where(xiUs >= -1 / 3)[0]  # works also if len(xiUs) = 0
     else:
-        possN, possP, ns = np.where(Deltas < 0)[0], np.where(Deltas >= 0)[0], np.zeros(xis.shape) + 1j * np.zeros(xis.shape)
-        n3sN = (qs[possN] + 1j * np.sqrt(np.abs(Deltas[possN]))) / 2.
-        ns[possN] = np.abs(n3sN) ** (1. / 3.) * np.exp(1j * (np.abs(np.angle(n3sN)) + 2. * np.pi * 1.) / 3.) # we ensure theta > 0; + 2 pi j for j = 0, 1, 2
-        auxs = (qs[possP] + np.sqrt(Deltas[possP])) / 2.
-        ns[possP] = np.sign(auxs) * (np.abs(auxs) ** (1. / 3.))
-    xs = np.real(p / (3. * ns) - ns - 2. / 3.)
-    return xs
+        possG = np.asarray([], dtype=int)
+    return xiDs, possG
