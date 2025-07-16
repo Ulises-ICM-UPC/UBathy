@@ -566,9 +566,9 @@ def GHInform_2506(UCode, pathFldMain, par, pos, margin=0, sB='*', nFill=10):  # 
 def GHLoadDGit():  # lm:2025-06-30; lr:2025-07-13
     dGit = {}
     dGit |= {'ind': 2}
-    dGit |= {'sOK': '\033[40;92m\u25CF\033[0m'}  # '\033[92m\u25CF\033[0m' '\U0001F7E2' '\033[92m✔\033[0m'
-    dGit |= {'sWO': '\033[40;93m\u25CF\033[0m'}  # '\033[93m\u25CF\033[0m' '\U0001F7E0'
-    dGit |= {'sKO': '\033[40;91m\u25CF\033[0m'}  # '\033[91m\u25CF\033[0m' '\U0001F534' '\033[31m✘\033[0m'
+    dGit |= {'sOK': '\033[92m\u25CF\033[0m'}  # '\033[92m\u25CF\033[0m' '\U0001F7E2' '\033[92m✔\033[0m'
+    dGit |= {'sWO': '\033[93m\u25CF\033[0m'}  # '\033[93m\u25CF\033[0m' '\U0001F7E0'
+    dGit |= {'sKO': '\033[91m\u25CF\033[0m'}  # '\033[91m\u25CF\033[0m' '\U0001F534' '\033[31m✘\033[0m'
     dGit |= {'sB1': '\u2022'}  # bullet
     dGit |= {'sB2': '\u2023'}  # triangular bullet
     dGit |= {'sB3': '\u25E6'}  # white bullet
