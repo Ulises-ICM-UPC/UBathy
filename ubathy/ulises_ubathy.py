@@ -13,6 +13,9 @@ import random
 import shutil
 import string
 import subprocess
+import warnings
+warnings.filterwarnins("ignore")
+
 #
 def AllVar2DHor_2410(allVar, nc, nr, zr, rangeC):  # lm:2025-03-21; lr:2025-07-02
     if rangeC == 'close':
