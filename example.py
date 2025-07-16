@@ -7,8 +7,8 @@ import sys
 #
 os.environ["OPENBLAS_NUM_THREADS"] = "1"  # WATCH OUT
 #
-sys.path.insert(0, 'udrone')
-import udrone as udrone  # type: ignore
+sys.path.insert(0, 'ubathy')
+import ubathy as ubathy
 #
 # ~~~~~~ user data ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
@@ -18,34 +18,39 @@ pathFldMain = 'example'
 #
 if True:  # inform
     #
-    udrone.Inform_UDrone(pathFldMain, 0)
+    ubathy.Inform_UBathy(pathFldMain, 0)
 #
 if True:  # extract frames
     #
-    print('\nStep 1 out of 5: Extract frames from video')
-    udrone.Video2Frames(pathFldMain)
+    print('\nStep 1 out of 6: Extract frames from videos')
+    ubathy.Video2Frames(pathFldMain)
 #
-if True:  # calibrate basis
+if True:  # create meshes
     #
-    print('\nStep 2 out of 5: Calibrate the basis')
-    udrone.CalibrationOfBasisImages(pathFldMain)  # always smart-overwrite
-    #
-    print('\nStep 3 out of 5: Calibrate the basis forcing a unique set of intrinsic parameters')
-    udrone.CalibrationOfBasisImagesConstantIntrinsic(pathFldMain)  # always smart-overwrite
+    print('\nStep 2 out of 6: Create the meshes')
+    ubathy.CreateMeshes(pathFldMain)
 #
-if True:  # autocalibrate frames
+if True:  # decompose videos
     #
-    print('\nStep 4 out of 5: (Auto)calibrate the video frames')
-    udrone.AutoCalibrationOfFramesViaGCPs(pathFldMain)
+    print('\nStep 3 out of 6: Decompose the videos')
+    ubathy.ObtainWAndModes(pathFldMain)
 #
-if True:  # generate planviews and timestack
+if True:  # obtain wavenumbers
     #
-    print('\nStep 5 out of 5: Generate of the planviews and the timestacks')
-    udrone.PlanviewsFromImages(pathFldMain)
+    print('\nStep 4 out of 6: Obtain the wavenumbers')
+    ubathy.ObtainK(pathFldMain)
+#
+if True:  # obtain bathymetry
+    print('\nStep 5 out of 6: Obtain the bathymetry')
+    ubathy.ObtainB(pathFldMain)
+#
+if True:  # filter bathymetry
+    print('\nStep 6 out of 6: Filter the bathymetry (Kalman)')
+    ubathy.PerformKalman(pathFldMain)
 #
 if True:  # inform
     #
-    udrone.Inform_UDrone(pathFldMain, 1)
+    ubathy.Inform_UBathy(pathFldMain, 1)
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
