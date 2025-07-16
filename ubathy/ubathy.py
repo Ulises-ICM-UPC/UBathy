@@ -14,6 +14,8 @@ from scipy.interpolate import griddata  # type: ignore
 import sys
 #
 import ulises_ubathy as uli  # type: ignore
+import warnings
+warnings.filterwarnings("ignore")
 #
 # ~~~~~~ data ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
