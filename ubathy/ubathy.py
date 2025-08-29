@@ -465,7 +465,7 @@ def ObtainK(pathFldMain): # lm:2022-06-26; lr:2022-07-03
                     # obtain xsDel, ysDel and phasesDel; centered
                     xsDel, ysDel, phasesDel = xsMTMP - x0M, ysMTMP - y0M, np.angle(np.exp(1j * (phasesMTMP - phase0M)))  # IMP*
                     # update kxs and kys
-                    kx, ky, _, possG = uli.RANSACPlane(xsDel, ysDel, phasesDel, 0.25, pDesired=1-1.e-9, margin=0.2, max_nForRANSAC=100)  # WATCH OUT: epsilon
+                    kx, ky, _, possG = uli.RANSACPlane(xsDel, ysDel, phasesDel, 0.25, pDesired=1-1.e-9, margin=0.2, max_nForRANSAC=200)  # WATCH OUT: epsilon
                     if len(possG) < 6:
                         continue
                     kxs[posK, posRK], kys[posK, posRK] = kx, ky
